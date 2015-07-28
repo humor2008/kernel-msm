@@ -1208,6 +1208,7 @@ static int req_crypt_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 					 __func__);
 		tfm = NULL;
 		err =  DM_REQ_CRYPT_ERROR;
+		tfm = NULL;
 		goto ctr_exit;
 	}
 
