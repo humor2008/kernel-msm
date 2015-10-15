@@ -1,0 +1,5 @@
+CUR_TC=~/android/toolchains/stock_chain/bin/
+
+### cleaning
+ARCH=arm CROSS_COMPILE=${CUR_TC}aarch64-linux-android- make distclean
+make mrproper

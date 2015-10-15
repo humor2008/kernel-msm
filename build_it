@@ -1,0 +1,28 @@
+CUR_TC=~/android/toolchains/stock_chain/bin/
+APPEND=aarch64-linux-android-
+
+### compile kernel
+ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make clark_defconfig
+ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make xconfig
+cp ./.config arch/arm64/configs/clark_defconfig
+ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make CONFIG_DEBUG_SECTION_MISMATCH=y -j8
+
+echo "checking for compiled kernel..."
+if [ -f arch/arm64/boot/Image ]
+then
+
+echo "generating device tree..."
+../build_clark/dtbTool -2 -o ../build_clark/dt.img -s 4096 -p ./scripts/dtc/ ./arch/arm/boot/dts/
+
+### copy zImage
+cp arch/arm64/boot/Image ../build_clark/Image
+
+### copy all modules
+find . -name "*.ko" -exec cp -v {} ../build_clark/modules/ \;
+
+cd ../build_clark/
+
+~/android/build_clark/make_it.sh
+~/android/build_clark/flash_it.sh
+
+fi
