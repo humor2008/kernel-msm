@@ -5,7 +5,7 @@ APPEND=aarch64-linux-android-
 ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make clark_defconfig
 ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make xconfig
 cp ./.config arch/arm64/configs/clark_defconfig
-ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make CONFIG_DEBUG_SECTION_MISMATCH=y -j8
+ARCH=arm64 CROSS_COMPILE=${CUR_TC}${APPEND} make CONFIG_DEBUG_SECTION_MISMATCH=y -j16
 
 echo "checking for compiled kernel..."
 if [ -f arch/arm64/boot/Image ]
