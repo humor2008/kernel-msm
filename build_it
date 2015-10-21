@@ -23,6 +23,20 @@ find . -name "*.ko" -exec cp -v {} ../build_clark/modules/ \;
 cd ../build_clark/
 
 ~/android/build_clark/make_it.sh
+
+cp boot.img ../topack_clark/boot.img
+rm -rf ../topack_clark/system/lib/modules
+cp -R modules ../topack_clark/system/lib/
+
+mkdir -p ../topack_clark/system/lib/modules/qca_cld/
+cp ../topack_clark/system/lib/modules/wlan.ko ../topack_clark/system/lib/modules/qca_cld/qca_cld_wlan.ko
+
+cd ../topack_clark/
+
+rm XClark-*.zip
+
+zip -r9 XClark-v$1.zip *
+
 ~/android/build_clark/flash_it.sh
 
 fi
