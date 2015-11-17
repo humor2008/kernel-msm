@@ -29,8 +29,8 @@ struct notifier_block display_worker;
 
 #define X_PLUG "xplug"
 
-#define DRIVER_VERSION  1
-#define DRIVER_SUBVER 8
+#define DRIVER_VERSION  2
+#define DRIVER_SUBVER 0
 
 typedef enum {
 	DISABLED,
@@ -90,7 +90,7 @@ struct cpu_load_data {
 
 static DEFINE_PER_CPU(struct cpu_load_data, cpuload);
 
-static int cpu_series[] = {0, 1, 4, 2, 3, 5};
+static int cpu_series[] = {0, 1, 4, 2, 3, 5, INT_MAX};
 static int curr_index = 0;
 
 static void print_cpus_all(void);
@@ -199,7 +199,7 @@ static void update_xplug_state(void)
 
 static void __cpuinit xplug_work_fn(struct work_struct *work)
 {
-	bool up = false;
+	//bool up = false;
 	bool sample = false;
 	unsigned int cpu = nr_cpu_ids;
 
@@ -218,12 +218,22 @@ static void __cpuinit xplug_work_fn(struct work_struct *work)
 		break;
 	case UP:
 		cpu = cpu_series[++curr_index];
-		up = true;
+		if(cpu < max_cpus)	{
+			cpu_up(cpu);
+		} else {
+			--curr_index;
+		}		
 		sample = true;
 		xplug_state = IDLE;
 		break;
 	case DOWN:
 		cpu = cpu_series[curr_index];
+		if(cpu > 0)	{
+			cpu_down(cpu);
+			--curr_index;
+		} else {
+			++curr_index;
+		}
 		sample = true;
 		xplug_state = IDLE;
 		break;
@@ -236,22 +246,6 @@ static void __cpuinit xplug_work_fn(struct work_struct *work)
 	if (sample)
 		queue_delayed_work_on(0, xplug_wq, &xplug_work,
 					msecs_to_jiffies(sample_rate));
-
-	if (cpu < NR_CPUS) {
-		if(cpu >= max_cpus)	{
-			cpu_down(cpu);
-			curr_index--;
-		}
-		if (up)	{
-			if(cpu < max_cpus)	{
-				cpu_up(cpu);
-			}
-		}
-		else	{
-			cpu_down(cpu);
-			curr_index--;
-		}
-	}
 
 #ifdef X_PLUG_DEBUG
 	print_cpus_all();		
@@ -271,7 +265,7 @@ static inline void offline_cpus(void)
 	}
 	curr_index = min_cpus - 1;
 #if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)
-	pr_info("%s: %d cpus were offlined\n", X_PLUG, j);
+	pr_info("%s: %d cpus were offlined\n", X_PLUG, j - min_cpus);
 #endif
 }
 
