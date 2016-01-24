@@ -1219,7 +1219,6 @@ void bam_data_start_rx_tx(u8 port_num)
 
 	spin_lock_irqsave(&port->port_lock, flags);
 	d = &port->data_ch;
-
 	if (!port->port_usb || !port->port_usb->in->driver_data
 		|| !port->port_usb->out->driver_data) {
 		pr_err("%s: Can't start tx, rx, ep not enabled", __func__);
@@ -1292,53 +1291,39 @@ static int bam2bam_data_port_alloc(int portno)
 
 void u_bam_data_start_rndis_ipa(void)
 {
-	int port_num;
-	struct bam_data_port *port;
+	int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
+					RNDIS_QC_ACTIVE_PORT);
+	struct bam_data_port *port = bam2bam_data_ports[port_num];
 	struct bam_data_ch_info *d;
 
 	pr_debug("%s\n", __func__);
-
-	port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					RNDIS_QC_ACTIVE_PORT);
-	port = bam2bam_data_ports[port_num];
 	if (!port) {
 		pr_err("%s: port is NULL", __func__);
 		return;
 	}
 
 	d = &port->data_ch;
-
-	if (!atomic_read(&d->pipe_connect_notified)) {
-		/*
-		 * Increment usage count upon cable connect. Decrement after IPA
-		 * handshake is done in disconnect work due to cable disconnect
-		 * or in suspend work.
-		 */
-		queue_work(bam_data_wq, &port->connect_w);
-	} else {
+	if (!atomic_read(&d->pipe_connect_notified))
+		queue_work(bam_data_wq, rndis_conn_w);
+	else
 		pr_debug("%s: Transfers already started?\n", __func__);
-	}
 }
 
 void u_bam_data_stop_rndis_ipa(void)
 {
-	int port_num;
-	struct bam_data_port *port;
+	int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
+					RNDIS_QC_ACTIVE_PORT);
+	struct bam_data_port *port = bam2bam_data_ports[port_num];
 	struct bam_data_ch_info *d;
 
 	pr_debug("%s\n", __func__);
-
-	port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					RNDIS_QC_ACTIVE_PORT);
-	port = bam2bam_data_ports[port_num];
 	if (!port) {
 		pr_err("%s: port is NULL", __func__);
 		return;
 	}
 
 	d = &port->data_ch;
-
-	if (atomic_read(&d->pipe_connect_notified)) {
+	if (!atomic_read(&d->pipe_connect_notified)) {
 		rndis_ipa_reset_trigger();
 		bam_data_stop_endless_tx(port);
 		if (port->is_ipa_connected)

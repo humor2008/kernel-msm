@@ -68,7 +68,7 @@ static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
  * performance cost, and for other reasons may not always be desired.
  * So we allow it it to be disabled.
  */
-bool use_spi_crc = 0;
+bool use_spi_crc = 1;
 module_param(use_spi_crc, bool, 0);
 
 /*
@@ -3105,11 +3105,14 @@ static bool mmc_is_vaild_state_for_clk_scaling(struct mmc_host *host,
 	 * If the current partition type is RPMB, clock switching may not
 	 * work properly as sending tuning command (CMD21) is illegal in
 	 * this mode.
+	 * In case invalid_state is set, we forbid clock scaling, unless,
+	 * its down-scale and "scale_down_in_low_wr_load" is set.
 	 */
 	if (!card || (mmc_card_mmc(card) &&
-			card->part_curr == EXT_CSD_PART_CONFIG_ACC_RPMB)
-			|| (state != MMC_LOAD_LOW &&
-				host->clk_scaling.invalid_state))
+		card->part_curr == EXT_CSD_PART_CONFIG_ACC_RPMB) ||
+		(host->clk_scaling.invalid_state &&
+		!(state == MMC_LOAD_LOW &&
+		host->clk_scaling.scale_down_in_low_wr_load)))
 		goto out;
 
 	if (mmc_send_status(card, &status)) {
@@ -3715,60 +3718,6 @@ int mmc_flush_cache(struct mmc_card *card)
 }
 EXPORT_SYMBOL(mmc_flush_cache);
 
-/*
- * Turn the cache ON/OFF.
- * Turning the cache OFF shall trigger flushing of the data
- * to the non-volatile storage.
- * This function should be called with host claimed
- */
-int mmc_cache_ctrl(struct mmc_host *host, u8 enable)
-{
-	struct mmc_card *card = host->card;
-	unsigned int timeout;
-	int err = 0, rc;
-
-	BUG_ON(!card);
-	timeout = card->ext_csd.generic_cmd6_time;
-
-	if (!(host->caps2 & MMC_CAP2_CACHE_CTRL) ||
-			mmc_card_is_removable(host) ||
-			(card->quirks & MMC_QUIRK_CACHE_DISABLE))
-		return err;
-
-	if (card && mmc_card_mmc(card) &&
-			(card->ext_csd.cache_size > 0)) {
-		enable = !!enable;
-
-		if (card->ext_csd.cache_ctrl ^ enable) {
-			if (!enable)
-				timeout = MMC_FLUSH_REQ_TIMEOUT_MS;
-
-			err = mmc_switch_ignore_timeout(card,
-					EXT_CSD_CMD_SET_NORMAL,
-					EXT_CSD_CACHE_CTRL, enable, timeout);
-
-			if (err == -ETIMEDOUT && !enable) {
-				pr_err("%s:cache disable operation timeout\n",
-						mmc_hostname(card->host));
-				rc = mmc_interrupt_hpi(card);
-				if (rc)
-					pr_err("%s: mmc_interrupt_hpi() failed (%d)\n",
-							mmc_hostname(host), rc);
-			} else if (err) {
-				pr_err("%s: cache %s error %d\n",
-						mmc_hostname(card->host),
-						enable ? "on" : "off",
-						err);
-			} else {
-				card->ext_csd.cache_ctrl = enable;
-			}
-		}
-	}
-
-	return err;
-}
-EXPORT_SYMBOL(mmc_cache_ctrl);
-
 #ifdef CONFIG_PM
 
 /**
@@ -3994,6 +3943,135 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 	return 0;
 }
 #endif
+
+/*
+ * Fill in the mmc_request structure given a set of transfer parameters.
+ */
+void mmc_prepare_mrq(struct mmc_card *card,
+	struct mmc_request *mrq, struct scatterlist *sg, unsigned sg_len,
+	unsigned dev_addr, unsigned blocks, unsigned blksz, int write)
+{
+	BUG_ON(!mrq || !mrq->cmd || !mrq->data || !mrq->stop);
+
+	if (blocks > 1) {
+		mrq->cmd->opcode = write ?
+			MMC_WRITE_MULTIPLE_BLOCK : MMC_READ_MULTIPLE_BLOCK;
+	} else {
+		mrq->cmd->opcode = write ?
+			MMC_WRITE_BLOCK : MMC_READ_SINGLE_BLOCK;
+	}
+
+	mrq->cmd->arg = dev_addr;
+	if (!mmc_card_blockaddr(card))
+		mrq->cmd->arg <<= 9;
+
+	mrq->cmd->flags = MMC_RSP_R1 | MMC_CMD_ADTC;
+
+	if (blocks == 1)
+		mrq->stop = NULL;
+	else {
+		mrq->stop->opcode = MMC_STOP_TRANSMISSION;
+		mrq->stop->arg = 0;
+		mrq->stop->flags = MMC_RSP_R1B | MMC_CMD_AC;
+	}
+
+	mrq->data->blksz = blksz;
+	mrq->data->blocks = blocks;
+	mrq->data->flags = write ? MMC_DATA_WRITE : MMC_DATA_READ;
+	mrq->data->sg = sg;
+	mrq->data->sg_len = sg_len;
+
+	mmc_set_data_timeout(mrq->data, card);
+}
+EXPORT_SYMBOL(mmc_prepare_mrq);
+
+static int mmc_busy(struct mmc_command *cmd)
+{
+	return !(cmd->resp[0] & R1_READY_FOR_DATA) ||
+		(R1_CURRENT_STATE(cmd->resp[0]) == R1_STATE_PRG);
+}
+
+/*
+ * Wait for the card to finish the busy state
+ */
+int mmc_wait_busy(struct mmc_card *card)
+{
+	int ret, busy = 0;
+	struct mmc_command cmd = {0};
+
+	memset(&cmd, 0, sizeof(struct mmc_command));
+	cmd.opcode = MMC_SEND_STATUS;
+	cmd.arg = card->rca << 16;
+	cmd.flags = MMC_RSP_SPI_R2 | MMC_RSP_R1 | MMC_CMD_AC;
+
+	do {
+		ret = mmc_wait_for_cmd(card->host, &cmd, 0);
+		if (ret)
+			break;
+
+		if (!busy && mmc_busy(&cmd)) {
+			busy = 1;
+			if (card->host->caps & MMC_CAP_WAIT_WHILE_BUSY) {
+				pr_warn("%s: Warning: Host did not "
+					"wait for busy state to end.\n",
+					mmc_hostname(card->host));
+			}
+		}
+
+	} while (mmc_busy(&cmd));
+
+	return ret;
+}
+EXPORT_SYMBOL(mmc_wait_busy);
+
+int mmc_check_result(struct mmc_request *mrq)
+{
+	int ret;
+
+	BUG_ON(!mrq || !mrq->cmd || !mrq->data);
+
+	ret = 0;
+
+	if (!ret && mrq->cmd->error)
+		ret = mrq->cmd->error;
+	if (!ret && mrq->data->error)
+		ret = mrq->data->error;
+	if (!ret && mrq->stop && mrq->stop->error)
+		ret = mrq->stop->error;
+	if (!ret && mrq->data->bytes_xfered !=
+		mrq->data->blocks * mrq->data->blksz)
+		ret = -EPERM;
+
+	return ret;
+}
+EXPORT_SYMBOL(mmc_check_result);
+
+/*
+ * transfer with certain parameters
+ */
+int mmc_simple_transfer(struct mmc_card *card,
+	struct scatterlist *sg, unsigned sg_len, unsigned dev_addr,
+	unsigned blocks, unsigned blksz, int write)
+{
+	struct mmc_request mrq = {0};
+	struct mmc_command cmd = {0};
+	struct mmc_command stop = {0};
+	struct mmc_data data = {0};
+
+	mrq.cmd = &cmd;
+	mrq.data = &data;
+	mrq.stop = &stop;
+
+	mmc_prepare_mrq(card, &mrq, sg, sg_len, dev_addr,
+		blocks, blksz, write);
+
+	mmc_wait_for_req(card->host, &mrq);
+
+	mmc_wait_busy(card);
+
+	return mmc_check_result(&mrq);
+}
+EXPORT_SYMBOL(mmc_simple_transfer);
 
 #ifdef CONFIG_PM_RUNTIME
 void mmc_dump_dev_pm_state(struct mmc_host *host, struct device *dev)

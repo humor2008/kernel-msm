@@ -1076,7 +1076,7 @@ int tcp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	if (unlikely(tp->repair)) {
 		if (tp->repair_queue == TCP_RECV_QUEUE) {
 			copied = tcp_send_rcvq(sk, msg, size);
-			goto out;
+			goto out_nopush;
 		}
 
 		err = -EINVAL;
@@ -1249,6 +1249,7 @@ wait_for_memory:
 out:
 	if (copied)
 		tcp_push(sk, flags, mss_now, tp->nonagle);
+out_nopush:
 	release_sock(sk);
 
 	if (copied + copied_syn)
@@ -2771,7 +2772,7 @@ void tcp_get_info(const struct sock *sk, struct tcp_info *info)
 	if (sk->sk_socket) {
 		struct file *filep = sk->sk_socket->file;
 		if (filep)
-			info->tcpi_count = atomic_read(&filep->f_count);
+			info->tcpi_count = file_count(filep);
 	}
 }
 EXPORT_SYMBOL_GPL(tcp_get_info);

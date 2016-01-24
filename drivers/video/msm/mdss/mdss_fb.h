@@ -276,6 +276,7 @@ struct msm_fb_data_type {
 	void *cursor_buf;
 	phys_addr_t cursor_buf_phys;
 	dma_addr_t cursor_buf_iova;
+	size_t cursor_buf_size;
 
 	int ext_ad_ctrl;
 	u32 ext_bl_ctrl;
@@ -345,13 +346,6 @@ struct msm_fb_data_type {
 	u32 quickdraw_panel_state;
 	bool quickdraw_reset_panel;
 };
-
-struct sys_panelinfo {
-	char *panel_name;
-	u64 *panel_ver;
-};
-
-extern struct sys_panelinfo panelinfo;
 
 static inline void mdss_fb_update_notify_update(struct msm_fb_data_type *mfd)
 {

@@ -16,6 +16,7 @@
 #include <linux/kobject.h>
 #include <linux/notifier.h>
 #include <linux/sysfs.h>
+#include <asm/cputime.h>
 
 /*********************************************************************
  *                        CPUFREQ INTERFACE                          *
@@ -99,7 +100,6 @@ struct cpufreq_policy {
 	 *     __cpufreq_governor(data, CPUFREQ_GOV_POLICY_EXIT);
 	 */
 	struct rw_semaphore	rwsem;
-	unsigned int util;
 };
 
 /* Only for ACPI */
@@ -135,7 +135,6 @@ void cpufreq_sysfs_remove_file(const struct attribute *attr);
 unsigned int cpufreq_get(unsigned int cpu);
 unsigned int cpufreq_quick_get(unsigned int cpu);
 unsigned int cpufreq_quick_get_max(unsigned int cpu);
-unsigned int cpufreq_quick_get_util(unsigned int cpu);
 void disable_cpufreq(void);
 
 u64 get_cpu_idle_time(unsigned int cpu, u64 *wall, int io_busy);
@@ -165,7 +164,6 @@ static inline void disable_cpufreq(void) { }
 
 #define CPUFREQ_RELATION_L 0  /* lowest frequency at or above target */
 #define CPUFREQ_RELATION_H 1  /* highest frequency below or at target */
-#define CPUFREQ_RELATION_C 2  /* closest frequency to target */
 
 struct freq_attr {
 	struct attribute attr;
@@ -434,9 +432,6 @@ extern struct cpufreq_governor cpufreq_gov_conservative;
 #elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE)
 extern struct cpufreq_governor cpufreq_gov_interactive;
 #define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_interactive)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_ELEMENTALX)
-extern struct cpufreq_governor cpufreq_gov_elementalx;
-#define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_elementalx)
 #endif
 
 /*********************************************************************
@@ -488,5 +483,11 @@ static inline int cpufreq_generic_exit(struct cpufreq_policy *policy)
 	cpufreq_frequency_table_put_attr(policy->cpu);
 	return 0;
 }
+
+/*********************************************************************
+ *                         CPUFREQ STATS                             *
+ *********************************************************************/
+
+void acct_update_power(struct task_struct *p, cputime_t cputime);
 
 #endif /* _LINUX_CPUFREQ_H */

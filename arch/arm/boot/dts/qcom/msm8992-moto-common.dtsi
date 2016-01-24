@@ -18,6 +18,83 @@
 #include <moto-mem-reserve.h>
 
 / {
+	cpus {
+		CPU0: cpu@0 {
+			current = < 17347 //384000 kHz
+				24959 //460800 kHz
+				30570 //600000 kHz
+				39367 //672000 kHz
+				44313 //787200 kHz
+				54043 //864000 kHz
+				66856 //960000 kHz
+				105574 //1248000 kHz
+				139040>; //1440000 kHz
+		};
+		CPU1: cpu@1 {
+			current = < 17347 //384000 kHz
+				24959 //460800 kHz
+				30570 //600000 kHz
+				39367 //672000 kHz
+				44313 //787200 kHz
+				54043 //864000 kHz
+				66856 //960000 kHz
+				105574 //1248000 kHz
+				139040>; //1440000 kHz
+		};
+		CPU2: cpu@2 {
+			current = < 17347 //384000 kHz
+				24959 //460800 kHz
+				30570 //600000 kHz
+				39367 //672000 kHz
+				44313 //787200 kHz
+				54043 //864000 kHz
+				66856 //960000 kHz
+				105574 //1248000 kHz
+				139040>; //1440000 kHz
+		};
+		CPU3: cpu@3 {
+			current = < 17347 //384000 kHz
+				24959 //460800 kHz
+				30570 //600000 kHz
+				39367 //672000 kHz
+				44313 //787200 kHz
+				54043 //864000 kHz
+				66856 //960000 kHz
+				105574 //1248000 kHz
+				139040>; //1440000 kHz
+		};
+		CPU4: cpu@100 {
+			current = < 79343 //384000 kHz
+				99359 //480000 kHz
+				129500 //633600 kHz
+				165212 //768000 kHz
+				176718 //864000 kHz
+				198416 //960000 kHz
+				283401 //1248000 kHz
+				320387 //1344000 kHz
+				357506 //1440000 kHz
+				394718 //1536000 kHz
+				439770 //1632000 kHz
+				466758 //1689600 kHz
+				538767>; //1824000 kHz
+		};
+		CPU5: cpu@101 {
+			current = < 79343 //384000 kHz
+				99359 //480000 kHz
+				129500 //633600 kHz
+				165212 //768000 kHz
+				176718 //864000 kHz
+				198416 //960000 kHz
+				283401 //1248000 kHz
+				320387 //1344000 kHz
+				357506 //1440000 kHz
+				394718 //1536000 kHz
+				439770 //1632000 kHz
+				466758 //1689600 kHz
+				538767>; //1824000 kHz
+		};
+	};
+
 	aliases {
 		i2c4 = &i2c_4;
 		i2c5 = &i2c_5;
@@ -180,8 +257,9 @@
 		qcom,pin-func = <0>;
 		label = "florida_irq";
 		florida_irq_default: default {
-			bias-disable;
+			bias-pull-down; /* pull down */
 			drive-strength = <2>;
+			input-enable;
 		};
 	};
 
@@ -596,6 +674,8 @@
 	pinctrl-names = "active", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off>;
+
+	qcom,sd;
 
 	qcom,clk-rates = <400000 20000000 25000000 50000000 100000000 200000000>;
 	qcom,bus-speed-mode = "SDR12", "SDR25", "SDR50", "DDR50", "SDR104";
@@ -1066,6 +1146,7 @@
 				<&msm_gpio 110 0>; /* RESET */
 			touch_vdd-supply = <&pm8994_l22>;
 			synaptics,gpio-config;
+			synaptics,aod-multi-touch = <4>;
 			pinctrl-names = "default", "active";
 			pinctrl-0 = <&touch_reset_active &touch_int_default>;
 			pinctrl-1 = <&touch_reset_active &touch_int_active>;
@@ -1073,10 +1154,10 @@
 				touchmode-default = <&default_active &default_suspended>;
 			};
 			default_active: touchstate_default_active {
-				patch-data = "";
+				patch-data = "F51@0=7";
 			};
 			default_suspended: touchstate_aod_suspended {
-				patch-data = "F12@20=3838,23=1,23:1=1;F1@0=1&7";
+				patch-data = "F12@20=3838,23=0104;F1@0=1&7";
 			};
 		};
 	};
@@ -1410,6 +1491,16 @@
 	};
 
 	/delete-node/ usb-otg-switch;
+
+	mdss_hdmi_tx: qcom,hdmi_tx@fd9a0000{
+		status = "disabled";
+	};
+};
+
+/* Since mdss_hdmi_tx status = "disabled" above, change the writeback cell-index
+ * from 2 to 1 or the writeback fb will defer probe forever */
+&mdss_fb2 {
+	cell-index = <1>;
 };
 
 &spi_0 {
@@ -1924,4 +2015,8 @@
 			qcom,scaling-factor = <1000>;
 		};
 	};
+};
+
+&wcd9xxx_intc {
+	status = "disabled";
 };

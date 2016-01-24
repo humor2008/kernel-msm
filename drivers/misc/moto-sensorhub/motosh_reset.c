@@ -80,8 +80,10 @@ void motosh_reset(struct motosh_platform_data *pdata, unsigned char *cmdbuff)
 	 * into a bad state. This should allow the sensorhub
 	 * to recover from the scenario where capsense is preventing
 	 * its initialization. */
-	cycapsense_reset();
-	msleep(CAPSENSE_RESET_DELAY);
+	if (cycapsense_reset() == -ENODEV)
+		msleep(MOTOSH_RESET_DELAY);
+	else
+		msleep(CAPSENSE_RESET_DELAY);
 
 	gpio_set_value(pdata->gpio_reset, 1);
 	msleep(MOTOSH_RESET_DELAY);
@@ -362,6 +364,11 @@ int motosh_reset_and_init(enum reset_mode mode)
 	if (err)
 		ret_err = err;
 #endif
+
+	/* Write the current touch configuration to
+	 * the sensorhub.  On reset force the update even
+	 * if the touch driver says nothing has changed. */
+	motosh_check_touch_config_locked(FORCE_UPDATE);
 
 	/* sending reset to slpc hal */
 	motosh_ms_data_buffer_write(motosh_misc_data, DT_RESET, NULL, 0, false);

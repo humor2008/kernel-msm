@@ -804,6 +804,7 @@ static const u32 venus_hfi_bus_table[] = {
 	BUS_LOAD(1280, 736, 30),
 	BUS_LOAD(1280, 736, 60),
 	BUS_LOAD(1920, 1088, 30),
+	BUS_LOAD(2560, 1440, 30),
 	BUS_LOAD(1920, 1088, 60),
 	BUS_LOAD(3840, 2176, 24),
 	BUS_LOAD(4096, 2176, 24),
@@ -1743,6 +1744,7 @@ static int venus_hfi_power_enable(void *dev)
 		dprintk(VIDC_ERR, "Invalid params: %p\n", device);
 		return -EINVAL;
 	}
+	cancel_delayed_work_sync(&venus_hfi_pm_work);
 	mutex_lock(&device->write_lock);
 	rc = venus_hfi_power_on(device);
 	if (rc)
@@ -3361,6 +3363,7 @@ static void venus_hfi_response_handler(struct venus_hfi_device *device)
 
 static void venus_hfi_core_work_handler(struct work_struct *work)
 {
+	int rc = 0;
 	struct venus_hfi_device *device = list_first_entry(
 		&hal_ctxt.dev_head, struct venus_hfi_device, list);
 
@@ -3370,7 +3373,11 @@ static void venus_hfi_core_work_handler(struct work_struct *work)
 				device);
 		return;
 	}
-	if (venus_hfi_power_enable(device)) {
+	mutex_lock(&device->write_lock);
+	rc = venus_hfi_power_on(device);
+	mutex_unlock(&device->write_lock);
+
+	if (rc) {
 		dprintk(VIDC_ERR, "%s: Power enable failed\n", __func__);
 		return;
 	}
@@ -4066,6 +4073,7 @@ static int venus_hfi_load_fw(void *dev)
 
 		if (IS_ERR_OR_NULL(device->resources.fw.cookie)) {
 			dprintk(VIDC_ERR, "Failed to download firmware\n");
+			device->resources.fw.cookie = NULL;
 			rc = -ENOMEM;
 			goto fail_load_fw;
 		}

@@ -23,7 +23,6 @@
 #include <linux/regulator/consumer.h>
 #include <linux/leds-qpnp-wled.h>
 #include <linux/clk.h>
-#include <linux/lcd_notify.h>
 #include <linux/uaccess.h>
 #include <linux/leds.h>
 
@@ -31,9 +30,6 @@
 #include "mdss_panel.h"
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
-#ifdef CONFIG_STATE_NOTIFIER
-#include <linux/state_notifier.h>
-#endif
 
 #define XO_CLK_RATE	19200000
 
@@ -1433,11 +1429,14 @@ static int mdss_dsi_ctl_partial_roi(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+	if (!pdata->panel_info.partial_update_enabled)
+		return 0;
+
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
 	if (ctrl_pdata->set_col_page_addr)
-		rc = ctrl_pdata->set_col_page_addr(pdata);
+		rc = ctrl_pdata->set_col_page_addr(pdata, false);
 
 	return rc;
 }
@@ -1497,6 +1496,56 @@ static int mdss_dsi_set_stream_size(struct mdss_panel_data *pdata)
 	MIPI_OUTP((ctrl_pdata->ctrl_base) + 0x194, idle);
 
 	return 0;
+}
+
+static int mdss_dsi_reset_write_ptr(struct mdss_panel_data *pdata)
+{
+
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+	struct mdss_panel_info *pinfo;
+	int rc = 0;
+
+	if (pdata == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return -EINVAL;
+	}
+
+	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+
+	pinfo = &ctrl_pdata->panel_data.panel_info;
+	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
+	/* Need to reset the DSI core since the pixel stream was stopped. */
+	mdss_dsi_sw_reset(ctrl_pdata, true);
+
+	/*
+	 * Reset the partial update co-ordinates to the panel height and
+	 * width
+	 */
+	if (pinfo->dcs_cmd_by_left && (ctrl_pdata->ndx == 1))
+		goto skip_cmd_send;
+
+	pinfo->roi.x = 0;
+	pinfo->roi.y = 0;
+	pinfo->roi.w = pinfo->xres;
+	if (pinfo->dcs_cmd_by_left)
+		pinfo->roi.w = pinfo->xres;
+	if (pdata->next)
+		pinfo->roi.w += pdata->next->panel_info.xres;
+	pinfo->roi.h = pinfo->yres;
+
+	mdss_dsi_set_stream_size(pdata);
+
+	if (ctrl_pdata->set_col_page_addr)
+		rc = ctrl_pdata->set_col_page_addr(pdata, true);
+
+skip_cmd_send:
+	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
+
+	pr_debug("%s: DSI%d write ptr reset finished\n", __func__,
+			ctrl_pdata->ndx);
+
+	return rc;
 }
 
 int mdss_dsi_register_recovery_handler(struct mdss_dsi_ctrl_pdata *ctrl,
@@ -1559,7 +1608,6 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 							pdata);
 		break;
 	case MDSS_EVENT_UNBLANK:
-		lcd_notifier_call_chain(LCD_EVENT_ON_START, NULL);
 		mdss_dsi_get_hw_revision(ctrl_pdata);
 		if (ctrl_pdata->refresh_clk_rate)
 			rc = mdss_dsi_clk_refresh(pdata);
@@ -1571,15 +1619,9 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		ctrl_pdata->ctrl_state |= CTRL_STATE_MDP_ACTIVE;
 		if (ctrl_pdata->on_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_unblank(pdata);
-		lcd_notifier_call_chain(LCD_EVENT_ON_END, NULL);
 		pdata->panel_info.esd_rdy = true;
-#ifdef CONFIG_STATE_NOTIFIER
-		if (!use_fb_notifier)
-			state_resume();
-#endif
 		break;
 	case MDSS_EVENT_BLANK:
-		lcd_notifier_call_chain(LCD_EVENT_OFF_START, NULL);
 		power_state = (int) (unsigned long) arg;
 		if (ctrl_pdata->off_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
@@ -1591,11 +1633,6 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
 		rc = mdss_dsi_off(pdata, power_state);
-#ifdef CONFIG_STATE_NOTIFIER
-		if (!use_fb_notifier)
-			state_suspend();
-#endif
-		lcd_notifier_call_chain(LCD_EVENT_OFF_END, NULL);
 		break;
 	case MDSS_EVENT_CONT_SPLASH_FINISH:
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)
@@ -1625,6 +1662,9 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		break;
 	case MDSS_EVENT_ENABLE_PARTIAL_ROI:
 		rc = mdss_dsi_ctl_partial_roi(pdata);
+		break;
+	case MDSS_EVENT_DSI_RESET_WRITE_PTR:
+		rc = mdss_dsi_reset_write_ptr(pdata);
 		break;
 	case MDSS_EVENT_ENABLE_TE:
 		rc = mdss_dsi_hndl_enable_te(ctrl_pdata,
@@ -1693,8 +1733,6 @@ int mdss_dsi_ioctl_handler(struct mdss_panel_data *pdata, u32 cmd, void *arg)
 {
 	int rc = -ENOSYS;
 	struct msmfb_reg_access reg_access;
-	int old_tx_mode;
-	int mode = DSI_MODE_BIT_LP;
 
 	if (mdss_panel_is_power_off(pdata->panel_info.panel_power_state)) {
 		pr_err("%s: Panel is off\n", __func__);
@@ -1707,17 +1745,7 @@ int mdss_dsi_ioctl_handler(struct mdss_panel_data *pdata, u32 cmd, void *arg)
 		if (copy_from_user(&reg_access, arg, sizeof(reg_access)))
 			return -EFAULT;
 
-		if (reg_access.use_hs_mode)
-			mode = DSI_MODE_BIT_HS;
-
-		old_tx_mode = mdss_dsi_get_tx_power_mode(pdata);
-		if (mode != old_tx_mode)
-			mdss_dsi_set_tx_power_mode(mode, pdata);
-
 		rc = mdss_dsi_panel_ioctl_handler(pdata, cmd, arg);
-
-		if (mode != old_tx_mode)
-			mdss_dsi_set_tx_power_mode(old_tx_mode, pdata);
 		break;
 	default:
 		pr_err("%s: unsupport ioctl =0x%x\n", __func__, cmd);

@@ -250,9 +250,6 @@ struct dsi_clk_desc {
 	u32 pre_div_func;
 };
 
-#define DSI_MODE_BIT_HS 0
-#define DSI_MODE_BIT_LP 1
-
 struct dsi_panel_cmds {
 	char *buf;
 	int blen;
@@ -318,7 +315,7 @@ struct mdss_dsi_ctrl_pdata {
 	int (*on) (struct mdss_panel_data *pdata);
 	int (*off) (struct mdss_panel_data *pdata);
 	int (*low_power_config) (struct mdss_panel_data *pdata, int enable);
-	int (*set_col_page_addr) (struct mdss_panel_data *pdata);
+	int (*set_col_page_addr)(struct mdss_panel_data *pdata, bool force);
 	int (*check_status) (struct mdss_dsi_ctrl_pdata *pdata);
 	int (*check_read_status) (struct mdss_dsi_ctrl_pdata *pdata);
 	int (*cmdlist_commit)(struct mdss_dsi_ctrl_pdata *ctrl, int from_mdp);
@@ -465,10 +462,10 @@ int dsi_panel_device_register(struct device_node *pan_node,
 				struct mdss_dsi_ctrl_pdata *ctrl_pdata);
 
 int mdss_dsi_cmds_tx(struct mdss_dsi_ctrl_pdata *ctrl,
-		struct dsi_cmd_desc *cmds, int cnt);
+		struct dsi_cmd_desc *cmds, int cnt, int use_dma_tpg);
 
 int mdss_dsi_cmds_rx(struct mdss_dsi_ctrl_pdata *ctrl,
-			struct dsi_cmd_desc *cmds, int rlen);
+			struct dsi_cmd_desc *cmds, int rlen, int use_dma_tpg);
 
 void mdss_dsi_host_init(struct mdss_panel_data *pdata);
 void mdss_dsi_op_mode_config(int mode,

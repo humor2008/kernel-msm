@@ -35,6 +35,7 @@
 #define DT_CMD_HDR 6
 #define DCS_CMD_GET_POWER_MODE 0x0A    /* get power_mode */
 #define MIN_REFRESH_RATE 30
+#define DEFAULT_MDP_TRANSFER_TIME 14000
 
 DEFINE_LED_TRIGGER_GLOBAL(bl_led_trigger);
 
@@ -346,29 +347,29 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 	return rc;
 }
 
-static int mdss_dsi_get_pwr_mode(struct mdss_panel_data *pdata, u8 *pwr_mode,
-								int read_mode)
+static int mdss_dsi_get_pwr_mode(struct mdss_panel_data *pdata,
+			u8 *pwr_mode, bool hs_mode)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl;
-	int old_rd_mode;
+	struct dcs_cmd_req cmdreq;
 
 	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata, panel_data);
 
-	if (ctrl->panel_config.bare_board == true) {
-		*pwr_mode = 0;
-		goto end;
-	}
+	dcs_cmd[0] = DCS_CMD_GET_POWER_MODE;
+	dcs_cmd[1] = 0x00;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &dcs_read_cmd;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+	if (hs_mode)
+		cmdreq.flags |= CMD_REQ_HS_MODE;
+	cmdreq.rlen = 1;
+	cmdreq.rbuf = pwr_mode;
+	cmdreq.cb = NULL; /* call back */
 
-	old_rd_mode = mdss_dsi_get_tx_power_mode(pdata);
-	if (read_mode != old_rd_mode)
-		mdss_dsi_set_tx_power_mode(read_mode, pdata);
+	if (mdss_dsi_cmdlist_put(ctrl, &cmdreq) != 1)
+		pr_warn("%s: failed to read panel power mode\n", __func__);
 
-	mdss_dsi_panel_cmd_read(ctrl, DCS_CMD_GET_POWER_MODE, 0x00,
-							NULL, pwr_mode, 1);
-	if (read_mode != old_rd_mode)
-		mdss_dsi_set_tx_power_mode(old_rd_mode, pdata);
-
-end:
 	pr_debug("%s: panel power mode = 0x%x\n", __func__, *pwr_mode);
 
 	return 0;
@@ -462,8 +463,10 @@ int mdss_panel_parse_panel_config_dt(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 		(panel_ver & 0xff0000) >> 16,
 		ctrl_pdata->panel_config.panel_ver);
 
-	panelinfo.panel_name = (char *) &ctrl_pdata->panel_config.panel_name;
-	panelinfo.panel_ver = &ctrl_pdata->panel_config.panel_ver;
+	ctrl_pdata->panel_data.panel_info.panel_ver = panel_ver;
+	strlcpy(ctrl_pdata->panel_data.panel_info.panel_family_name,
+		ctrl_pdata->panel_config.panel_name,
+		sizeof(ctrl_pdata->panel_data.panel_info.panel_family_name));
 
 	of_node_put(np);
 
@@ -508,7 +511,8 @@ static void mdss_dsi_send_col_page_addr(struct mdss_dsi_ctrl_pdata *ctrl,
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 
-static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata)
+static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata,
+		bool force_send)
 {
 	struct mdss_panel_info *pinfo;
 	struct msm_fb_data_type *mfd;
@@ -553,7 +557,7 @@ static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata)
 	}
 
 	/* roi had changed, do col_page update */
-	if (!mdss_rect_cmp(c_roi, &roi) ||
+	if (force_send || !mdss_rect_cmp(c_roi, &roi) ||
 		mfd->quickdraw_in_progress) {
 		pr_debug("%s: ndx=%d x=%d y=%d w=%d h=%d\n",
 				__func__, ctrl->ndx, p_roi->x,
@@ -751,7 +755,7 @@ static int mdss_dsi_quickdraw_check_panel_state(struct mdss_panel_data *pdata,
 				panel_data);
 	mipi  = &pdata->panel_info.mipi;
 
-	mdss_dsi_get_pwr_mode(pdata, pwr_mode, DSI_MODE_BIT_LP);
+	mdss_dsi_get_pwr_mode(pdata, pwr_mode, false);
 
 	mfd = pdata->mfd;
 	if (mfd->quickdraw_panel_state == DSI_DISP_INVALID_STATE) {
@@ -852,7 +856,7 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	if (on_cmds->cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, on_cmds);
 
-	mdss_dsi_get_pwr_mode(pdata, &pwr_mode, DSI_MODE_BIT_LP);
+	mdss_dsi_get_pwr_mode(pdata, &pwr_mode, false);
 	if ((pwr_mode & 0x04) != 0x04) {
 		pr_err("%s: Display failure: DISON (0x04) bit not set\n",
 								__func__);
@@ -1548,8 +1552,8 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 		pinfo->partial_update_enabled = pinfo->partial_update_supported;
 		pr_info("%s: partial_update_enabled=%d\n", __func__,
 					pinfo->partial_update_enabled);
+		ctrl->set_col_page_addr = mdss_dsi_set_col_page_addr;
 		if (pinfo->partial_update_enabled) {
-			ctrl->set_col_page_addr = mdss_dsi_set_col_page_addr;
 			pinfo->partial_update_roi_merge =
 					of_property_read_bool(np,
 					"qcom,partial-update-roi-merge");
@@ -1843,51 +1847,37 @@ int mdss_dsi_panel_set_acl(struct mdss_dsi_ctrl_pdata *ctrl, int state)
 
 int mdss_dsi_panel_set_cabc(struct mdss_dsi_ctrl_pdata *ctrl, int mode)
 {
-	int rc = -EINVAL;
-	const char *name;
-	struct mdss_panel_info *pinfo;
-	struct dsi_panel_cmds *cmds = NULL;
+	struct mdss_panel_info *pinfo = &ctrl->panel_data.panel_info;
+	struct dsi_panel_cmds *cmds;
 
-	if (!ctrl) {
-		pr_err("%s: Invalid ctrl pointer.\n", __func__);
-		goto end;
-	}
-
-	pinfo = &ctrl->panel_data.panel_info;
-	name = mdss_panel_map_cabc_name(mode);
-	if (!name) {
-		pr_err("%s: Invalid mode: %d\n", __func__, mode);
-		goto end;
+	if (!pinfo->dynamic_cabc_enabled) {
+		pr_debug("%s: Dynamic CABC is disabled, ignore request\n",
+			__func__);
+		return 0;
 	}
 
 	if (pinfo->cabc_mode == mode) {
-		pr_warn("%s: Already in requested mode: %s\n", __func__, name);
-		rc = 0;
-		goto end;
+		pr_warn("%s: Already in requested mode: %d\n", __func__, mode);
+		return 0;
 	}
 
-	if (mode == CABC_MV_MODE && ctrl->cabc_mv_cmds.cmd_cnt)
+	if (mode == CABC_MV_MODE)
 		cmds = &ctrl->cabc_mv_cmds;
-	else if (mode == CABC_UI_MODE && ctrl->cabc_ui_cmds.cmd_cnt)
+	else if (mode == CABC_UI_MODE)
 		cmds = &ctrl->cabc_ui_cmds;
-
-	if (!cmds) {
-		pr_warn("%s: %s mode not supported.\n", __func__, name);
-		goto end;
+	else {
+		pr_warn("%s: mode %d not supported.\n", __func__, mode);
+		return -EINVAL;
 	}
 
-	if (mdss_panel_is_power_off(pinfo->panel_power_state)) {
-		pr_err("%s: Panel is off\n", __func__);
-		rc = -EPERM;
-		goto end;
+	if (!cmds->cmd_cnt) {
+		pr_err("%s: cmds of mode %d not configured.\n", __func__, mode);
+		return -EFAULT;
 	}
+
 	mdss_dsi_panel_cmds_send(ctrl, cmds);
-
-	pr_info("%s: Done setting %s mode\n", __func__, name);
 	pinfo->cabc_mode = mode;
-	rc = 0;
-end:
-	return rc;
+	return 0;
 }
 
 static int mdss_panel_parse_optional_prop(struct device_node *np,
@@ -2198,6 +2188,8 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	pinfo->mipi.frame_rate = (!rc ? tmp : 60);
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-panel-clockrate", &tmp);
 	pinfo->clk_rate = (!rc ? tmp : 0);
+	rc = of_property_read_u32(np, "qcom,mdss-mdp-transfer-time-us", &tmp);
+	pinfo->mdp_transfer_time_us = (!rc ? tmp : DEFAULT_MDP_TRANSFER_TIME);
 	data = of_get_property(np, "qcom,mdss-dsi-panel-timings", &len);
 	if ((!data) || (len != 12)) {
 		pr_err("%s:%d, Unable to read Phy timing settings",
@@ -2282,7 +2274,7 @@ error:
 }
 
 static int mdss_dsi_panel_reg_read(struct mdss_panel_data *pdata,
-					u8 reg, size_t size, u8 *buffer)
+				u8 reg, size_t size, u8 *buffer, bool hs_mode)
 {
 	int ret;
 	struct dcs_cmd_req cmdreq;
@@ -2315,6 +2307,8 @@ static int mdss_dsi_panel_reg_read(struct mdss_panel_data *pdata,
 	cmdreq.cmds = &reg_read_cmd;
 	cmdreq.cmds_cnt = 1;
 	cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+	if (hs_mode)
+		cmdreq.flags |= CMD_REQ_HS_MODE;
 	cmdreq.rlen = size;
 	cmdreq.cb = NULL; /* call back */
 	cmdreq.rbuf = kmalloc(MDSS_DSI_LEN, GFP_KERNEL);
@@ -2339,7 +2333,7 @@ err1:
 }
 
 static int mdss_dsi_panel_reg_write(struct mdss_panel_data *pdata,
-						size_t size, u8 *buffer)
+					size_t size, u8 *buffer, bool hs_mode)
 {
 	int ret = 0;
 	struct dcs_cmd_req cmdreq;
@@ -2372,6 +2366,8 @@ static int mdss_dsi_panel_reg_write(struct mdss_panel_data *pdata,
 	cmdreq.cmds = &reg_write_cmd;
 	cmdreq.cmds_cnt = 1;
 	cmdreq.flags = CMD_REQ_COMMIT;
+	if (hs_mode)
+		cmdreq.flags |= CMD_REQ_HS_MODE;
 	cmdreq.rlen = 0;
 	cmdreq.cb = NULL;
 
@@ -2409,12 +2405,14 @@ int mdss_dsi_panel_ioctl_handler(struct mdss_panel_data *pdata,
 		else
 			rc = mdss_dsi_panel_reg_write(pdata,
 						reg_access.buffer_size + 1,
-						reg_access_buf);
+						reg_access_buf,
+						reg_access.use_hs_mode);
 		break;
 	case MSMFB_REG_READ:
 		rc = mdss_dsi_panel_reg_read(pdata, reg_access.address,
 						reg_access.buffer_size,
-						reg_access_buf);
+						reg_access_buf,
+						reg_access.use_hs_mode);
 		if ((rc == 0) && (copy_to_user(reg_access.buffer,
 						reg_access_buf,
 						reg_access.buffer_size)))

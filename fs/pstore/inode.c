@@ -216,6 +216,8 @@ static int pstore_unlink(struct inode *dir, struct dentry *dentry)
 	if (p->psi->erase)
 		p->psi->erase(p->type, p->id, p->count,
 			      dentry->d_inode->i_ctime, p->psi);
+	else
+		return -EPERM;
 
 	return simple_unlink(dir, dentry);
 }
@@ -285,6 +287,7 @@ static void parse_options(char *options)
 
 static int pstore_remount(struct super_block *sb, int *flags, char *data)
 {
+	sync_filesystem(sb);
 	parse_options(data);
 
 	return 0;
@@ -351,34 +354,37 @@ int pstore_mkfile(enum pstore_type_id type, char *psname, u64 id, int count,
 
 	switch (type) {
 	case PSTORE_TYPE_DMESG:
-		snprintf(name, PSTORE_NAMELEN, "dmesg-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "dmesg-%s-%lld",
+			  psname, id);
 		break;
 	case PSTORE_TYPE_CONSOLE:
-		snprintf(name, PSTORE_NAMELEN, "console-%s", psname);
+		scnprintf(name, sizeof(name), "console-%s", psname);
 		break;
 	case PSTORE_TYPE_FTRACE:
-		snprintf(name, PSTORE_NAMELEN, "ftrace-%s", psname);
+		scnprintf(name, sizeof(name), "ftrace-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_MCE:
-		snprintf(name, PSTORE_NAMELEN, "mce-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "mce-%s-%lld", psname, id);
+		break;
+	case PSTORE_TYPE_PMSG:
+		scnprintf(name, sizeof(name), "pmsg-%s-%lld", psname, id);
 		break;
 	case PSTORE_TYPE_ANNOTATE:
-		snprintf(name, PSTORE_NAMELEN, "annotate-%s", psname);
+		snprintf(name, sizeof(name), "annotate-%s", psname);
 		break;
 	case PSTORE_TYPE_UNKNOWN:
-		snprintf(name, PSTORE_NAMELEN, "unknown-%s-%lld", psname, id);
+		scnprintf(name, sizeof(name), "unknown-%s-%lld", psname, id);
 		break;
 	default:
-		snprintf(name, PSTORE_NAMELEN, "type%d-%s-%lld",
-			type, psname, id);
+		scnprintf(name, sizeof(name), "type%d-%s-%lld",
+			  type, psname, id);
 		break;
 	}
 
 	mutex_lock(&root->d_inode->i_mutex);
 
-	rc = -ENOSPC;
 	dentry = d_alloc_name(root, name);
-	if (IS_ERR(dentry))
+	if (!dentry)
 		goto fail_lockedalloc;
 
 	memcpy(private->data, data, size);

@@ -13,6 +13,7 @@
 
 &mdss_mdp {
 	mot_inx_570_QHD_0_cmd_v0: qcom,mdss_dsi_mot_inx_570_QHD_dualmipi0_cmd_v0 {
+		compatible = "qcom,mdss-dsi-panel";
 		qcom,mdss-dsi-panel-name = "mipi_mot_cmd_inx_QHD_0_570_v0";
 		qcom,mdss-dsi-panel-controller = <&mdss_dsi0>;
 		qcom,mdss-dsi-panel-type = "dsi_cmd_mode";
@@ -107,6 +108,7 @@
 			15 01 00 00 00 00 02 1E CC
 			15 01 00 00 00 00 02 1F CC
 			15 01 00 00 00 00 02 20 BF
+			15 01 00 00 00 00 02 21 FF
 			/* set APL_TH(1440 RGBx2560:0.225) */
 			15 01 00 00 00 00 02 39 2A
 			15 01 00 00 00 00 02 3B CC
@@ -164,9 +166,13 @@
 		/* for Dynamic CABC */
 		qcom,mdss-dsi-cabc-ui-command = [15 01 00 00 00 00 02 55 01];
 		qcom,mdss-dsi-cabc-mv-command = [15 01 00 00 00 00 02 55 03];
+
+		qcom,panel-roi-alignment = <720 720 16 16 0 0>;
+		qcom,partial-update-enabled;
 	};
 
 	mot_inx_570_QHD_1_cmd_v0: qcom,mdss_dsi_mot_inx_570_QHD_dualmipi1_cmd_v0 {
+		compatible = "qcom,mdss-dsi-panel";
 		qcom,mdss-dsi-panel-name = "mipi_mot_cmd_inx_QHD_1_570_v0";
 		qcom,mdss-dsi-panel-controller = <&mdss_dsi1>;
 		qcom,mdss-dsi-panel-type = "dsi_cmd_mode";
@@ -219,5 +225,8 @@
 		qcom,mdss-dsi-te-dcs-command = <1>;
 		qcom,mdss-dsi-te-check-enable;
 		qcom,mdss-dsi-te-using-te-pin;
+
+		qcom,panel-roi-alignment = <720 720 16 16 0 0>;
+		qcom,partial-update-enabled;
 	};
 };

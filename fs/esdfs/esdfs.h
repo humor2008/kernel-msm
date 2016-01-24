@@ -41,14 +41,19 @@
 /* mount options */
 #define ESDFS_MOUNT_DERIVE_LEGACY	0x00000001
 #define ESDFS_MOUNT_DERIVE_UNIFIED	0x00000002
-#define ESDFS_MOUNT_DERIVE_SPLIT	0x00000004
+#define ESDFS_MOUNT_DERIVE_MULTI	0x00000004
+#define ESDFS_MOUNT_DERIVE_PUBLIC	0x00000008
+#define ESDFS_MOUNT_DERIVE_CONFINE	0x00000010
 
 #define clear_opt(sbi, option)	(sbi->options &= ~ESDFS_MOUNT_##option)
 #define set_opt(sbi, option)	(sbi->options |= ESDFS_MOUNT_##option)
 #define test_opt(sbi, option)	(sbi->options & ESDFS_MOUNT_##option)
 
 #define ESDFS_DERIVE_PERMS(sbi)	(test_opt(sbi, DERIVE_UNIFIED) || \
-					 test_opt(sbi, DERIVE_LEGACY))
+				 test_opt(sbi, DERIVE_LEGACY))
+#define ESDFS_RESTRICT_PERMS(sbi) (ESDFS_DERIVE_PERMS(sbi) && \
+				   !test_opt(sbi, DERIVE_PUBLIC) && \
+				   !test_opt(sbi, DERIVE_MULTI))
 
 /* from android_filesystem_config.h */
 #define AID_ROOT             0
@@ -68,8 +73,6 @@ enum {
 	ESDFS_TREE_ROOT_LEGACY,		/* root for legacy emulated storage */
 	ESDFS_TREE_ROOT,		/* root for a user */
 	ESDFS_TREE_MEDIA,		/* per-user basic permissions */
-	ESDFS_TREE_MEDIA_PICS,		/* .../DCIM, Pictures */
-	ESDFS_TREE_MEDIA_AV,		/* .../Alarm, Movies, etc */
 	ESDFS_TREE_ANDROID,		/* .../Android */
 	ESDFS_TREE_ANDROID_DATA,	/* .../Android/data */
 	ESDFS_TREE_ANDROID_OBB,		/* .../Android/obb */
@@ -155,6 +158,8 @@ struct esdfs_dentry_info {
 /* esdfs super-block data in memory */
 struct esdfs_sb_info {
 	struct super_block *lower_sb;
+	struct super_block *s_sb;
+	struct list_head s_list;
 	u32 lower_secid;
 	struct esdfs_perms lower_perms;
 	struct esdfs_perms upper_perms;	/* root in derived mode */
@@ -164,6 +169,10 @@ struct esdfs_sb_info {
 
 extern struct esdfs_perms esdfs_perms_table[ESDFS_PERMS_TABLE_SIZE];
 extern unsigned esdfs_package_list_version;
+
+void esdfs_drop_shared_icache(struct super_block *, struct inode *);
+void esdfs_drop_sb_icache(struct super_block *, unsigned long);
+void esdfs_add_super(struct esdfs_sb_info *, struct super_block *);
 
 #define ESDFS_INODE_IS_STALE(i) ((i)->version != esdfs_package_list_version)
 #define ESDFS_INODE_CAN_LINK(i) (test_opt(ESDFS_SB((i)->i_sb), \

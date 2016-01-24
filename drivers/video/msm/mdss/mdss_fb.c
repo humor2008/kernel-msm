@@ -72,7 +72,6 @@
 
 static struct fb_info *fbi_list[MAX_FBI_LIST];
 static int fbi_list_index;
-struct sys_panelinfo panelinfo = {NULL, NULL};
 
 static u32 mdss_fb_pseudo_palette[16] = {
 	0x00000000, 0xffffffff, 0xffffffff, 0xffffffff,
@@ -325,7 +324,7 @@ static int mdss_fb_get_panel_xres(struct mdss_panel_info *pinfo)
 	pdata = container_of(pinfo, struct mdss_panel_data, panel_info);
 
 	xres = pinfo->xres;
-	if (pdata->next)
+	if (pdata->next && pdata->next->active)
 		xres += mdss_fb_get_panel_xres(&pdata->next->panel_info);
 
 	return xres;
@@ -778,38 +777,57 @@ static struct attribute_group mdss_fb_attr_group = {
 	.attrs = mdss_fb_attrs,
 };
 
+static struct mdss_panel_info *get_panel_info(struct device *dev)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = fbi->par;
+	struct mdss_panel_info *pinfo = mfd->panel_info;
+
+	return pinfo;
+}
+
 static ssize_t panel_name_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%s\n", panelinfo.panel_name);
+	struct mdss_panel_info *pinfo = get_panel_info(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%s\n", pinfo->panel_family_name);
 }
 
 static ssize_t panel_ver_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "0x%016llx\n", *panelinfo.panel_ver);
+	struct mdss_panel_info *pinfo = get_panel_info(dev);
+
+	return snprintf(buf, PAGE_SIZE, "0x%08x\n",
+			pinfo->panel_ver);
 }
 
 static ssize_t panel_man_id_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	u32 panel_ver = (u32)(*panelinfo.panel_ver);
-	return snprintf(buf, PAGE_SIZE, "0x%02x\n", panel_ver & 0xff);
+	struct mdss_panel_info *pinfo = get_panel_info(dev);
+
+	return snprintf(buf, PAGE_SIZE, "0x%02x\n",
+			pinfo->panel_ver & 0xff);
 }
 
 static ssize_t panel_controller_ver_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	u32 panel_ver = (u32)(*panelinfo.panel_ver);
-	return snprintf(buf, PAGE_SIZE, "0x%02x\n", (panel_ver & 0xff00) >> 8);
+	struct mdss_panel_info *pinfo = get_panel_info(dev);
+
+	return snprintf(buf, PAGE_SIZE, "0x%02x\n",
+			(pinfo->panel_ver & 0xff00) >> 8);
 }
 
 static ssize_t panel_controller_drv_ver_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
-	u32 panel_ver = (u32)(*panelinfo.panel_ver);
+	struct mdss_panel_info *pinfo = get_panel_info(dev);
+
 	return snprintf(buf, PAGE_SIZE, "0x%02x\n",
-				(panel_ver & 0xff0000) >> 16);
+			(pinfo->panel_ver & 0xff0000) >> 16);
 }
 static DEVICE_ATTR(panel_name, S_IRUGO, panel_name_show, NULL);
 static DEVICE_ATTR(panel_ver, S_IRUGO, panel_ver_show, NULL);
@@ -867,6 +885,103 @@ static void mdss_fb_shutdown(struct platform_device *pdev)
 	mdss_fb_release_all(mfd->fbi, true);
 	sysfs_notify(&mfd->fbi->dev->kobj, NULL, "show_blank_event");
 	unlock_fb_info(mfd->fbi);
+}
+
+static void mdss_fb_videomode_from_panel_timing(struct fb_videomode *videomode,
+		struct mdss_panel_timing *pt)
+{
+	videomode->name = pt->name;
+	videomode->xres = pt->xres;
+	videomode->yres = pt->yres;
+	videomode->left_margin = pt->h_back_porch;
+	videomode->right_margin = pt->h_front_porch;
+	videomode->hsync_len = pt->h_pulse_width;
+	videomode->upper_margin = pt->v_back_porch;
+	videomode->lower_margin = pt->v_front_porch;
+	videomode->vsync_len = pt->v_pulse_width;
+	videomode->refresh = pt->frame_rate;
+	videomode->flag = 0;
+	videomode->vmode = 0;
+	videomode->sync = 0;
+
+	if (videomode->refresh) {
+		unsigned long clk_rate, h_total, v_total;
+
+		h_total = videomode->xres + videomode->left_margin
+			+ videomode->right_margin + videomode->hsync_len;
+		v_total = videomode->yres + videomode->lower_margin
+			+ videomode->upper_margin + videomode->vsync_len;
+		clk_rate = h_total * v_total * videomode->refresh;
+		videomode->pixclock = KHZ2PICOS(clk_rate / 1000);
+	} else {
+		videomode->pixclock = KHZ2PICOS(pt->clk_rate / 1000);
+	}
+}
+
+static int mdss_fb_init_panel_modes(struct msm_fb_data_type *mfd,
+		struct mdss_panel_data *pdata)
+{
+	struct fb_info *fbi = mfd->fbi;
+	struct fb_videomode *modedb;
+	struct mdss_panel_timing *pt;
+	struct list_head *pos;
+	int num_timings = 0;
+	int i = 0;
+
+	if (!pdata->timings_list.prev || !pdata->timings_list.next)
+		INIT_LIST_HEAD(&pdata->timings_list);
+
+	if (!fbi || !pdata->current_timing || list_empty(&pdata->timings_list))
+		return 0;
+
+	list_for_each(pos, &pdata->timings_list)
+		num_timings++;
+
+	modedb = devm_kzalloc(fbi->dev, num_timings * sizeof(*modedb),
+			GFP_KERNEL);
+	if (!modedb) {
+		pr_err("unable to allocate mem for modedb\n");
+		return -ENOMEM;
+	}
+
+	list_for_each_entry(pt, &pdata->timings_list, list) {
+		struct mdss_panel_timing *spt = NULL;
+		mdss_fb_videomode_from_panel_timing(modedb + i, pt);
+		if (pdata->next) {
+			spt = mdss_panel_get_timing_by_name(pdata->next,
+					modedb[i].name);
+			if (!IS_ERR_OR_NULL(spt))
+				modedb[i].xres += spt->xres;
+			else
+				pr_debug("no matching split config for %s\n",
+						modedb[i].name);
+
+			/*
+			 * if no panel timing found for current, need to
+			 * disable it otherwise mark it as active
+			 */
+			if (pt == pdata->current_timing)
+				pdata->next->active = !IS_ERR_OR_NULL(spt);
+		}
+
+		if (pt == pdata->current_timing) {
+			pr_debug("found current mode: %s\n", pt->name);
+			fbi->mode = modedb + i;
+		}
+		i++;
+	}
+
+	fbi->monspecs.modedb = modedb;
+	fbi->monspecs.modedb_len = num_timings;
+
+	/* destroy and recreate modelist */
+	fb_destroy_modelist(&fbi->modelist);
+
+	if (fbi->mode)
+		fb_videomode_to_var(&fbi->var, fbi->mode);
+	fb_videomode_to_modelist(modedb, num_timings, &fbi->modelist);
+
+	return 0;
 }
 
 static int mdss_fb_probe(struct platform_device *pdev)
@@ -969,6 +1084,8 @@ static int mdss_fb_probe(struct platform_device *pdev)
 		else
 			lcd_backlight_registered = 1;
 	}
+
+	mdss_fb_init_panel_modes(mfd, pdata);
 
 	mdss_fb_create_sysfs(mfd);
 	mdss_fb_send_panel_event(mfd, MDSS_EVENT_FB_REGISTERED, fbi);
@@ -2220,7 +2337,7 @@ static int mdss_fb_register(struct msm_fb_data_type *mfd)
 		return ret;
 	}
 
-	var->xres = mdss_fb_get_panel_xres(panel_info);
+	mdss_panelinfo_to_fb_var(panel_info, var);
 
 	fix->type = panel_info->is_3d_panel;
 	if (mfd->mdp.fb_stride)
@@ -2229,21 +2346,9 @@ static int mdss_fb_register(struct msm_fb_data_type *mfd)
 	else
 		fix->line_length = var->xres * bpp;
 
-	var->yres = panel_info->yres;
-	if (panel_info->physical_width)
-		var->width = panel_info->physical_width;
-	if (panel_info->physical_height)
-		var->height = panel_info->physical_height;
 	var->xres_virtual = var->xres;
 	var->yres_virtual = panel_info->yres * mfd->fb_page;
 	var->bits_per_pixel = bpp * 8;	/* FrameBuffer color depth */
-	var->upper_margin = panel_info->lcdc.v_back_porch;
-	var->lower_margin = panel_info->lcdc.v_front_porch;
-	var->vsync_len = panel_info->lcdc.v_pulse_width;
-	var->left_margin = panel_info->lcdc.h_back_porch;
-	var->right_margin = panel_info->lcdc.h_front_porch;
-	var->hsync_len = panel_info->lcdc.h_pulse_width;
-	var->pixclock = panel_info->clk_rate / 1000;
 
 	/*
 	 * Populate smem length here for uspace to get the
@@ -2457,10 +2562,11 @@ static int mdss_fb_release_all(struct fb_info *info, bool release_all)
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	struct mdss_fb_proc_info *pinfo = NULL, *temp_pinfo = NULL;
 	struct mdss_fb_proc_info *proc_info = NULL;
-	int ret = 0, ad_ret = 0;
+	int blank, ret = 0, ad_ret = 0;
 	int pid = current->tgid;
 	bool unknown_pid = true, release_needed = false;
 	struct task_struct *task = current->group_leader;
+	struct fb_event event;
 
 	if (!mfd->ref_cnt) {
 		pr_info("try to close unopened fb %d! from pid:%d name:%s\n",
@@ -2558,13 +2664,22 @@ static int mdss_fb_release_all(struct fb_info *info, bool release_all)
 									ad_ret);
 		}
 
+		blank = FB_BLANK_POWERDOWN;
+		event.info = info;
+		event.data = &blank;
+
+		fb_notifier_call_chain(FB_EARLY_EVENT_BLANK, &event);
+
 		ret = mdss_fb_blank_sub(FB_BLANK_POWERDOWN, info,
 			mfd->op_enable);
 		if (ret) {
+			fb_notifier_call_chain(FB_R_EARLY_EVENT_BLANK, &event);
 			pr_err("can't turn off fb%d! rc=%d current process=%s pid=%d known pid=%d\n",
 			      mfd->index, ret, task->comm, current->tgid, pid);
 			return ret;
-		}
+		} else
+			fb_notifier_call_chain(FB_EVENT_BLANK, &event);
+
 		if (mfd->fb_ion_handle)
 			mdss_fb_free_fb_ion_memory(mfd);
 
@@ -2961,6 +3076,21 @@ static int mdss_fb_pan_display(struct fb_var_screeninfo *var,
 		struct fb_info *info)
 {
 	struct mdp_display_commit disp_commit;
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+
+	/*
+	 * during mode switch through mode sysfs node, it will trigger a
+	 * pan_display after switch. This assumes that fb has been adjusted,
+	 * however when using overlays we may not have the right size at this
+	 * point, so it needs to go through PREPARE first. Abort pan_display
+	 * operations until that happens
+	 */
+	if (mfd->switch_state != MDSS_MDP_NO_UPDATE_REQUESTED) {
+		pr_debug("fb%d: pan_display skipped during switch\n",
+				mfd->index);
+		return 0;
+	}
+
 	memset(&disp_commit, 0, sizeof(disp_commit));
 	disp_commit.wait_for_finish = true;
 	memcpy(&disp_commit.var, var, sizeof(struct fb_var_screeninfo));
@@ -3014,16 +3144,32 @@ static void mdss_fb_var_to_panelinfo(struct fb_var_screeninfo *var,
 	pinfo->lcdc.h_front_porch = var->right_margin;
 	pinfo->lcdc.h_back_porch = var->left_margin;
 	pinfo->lcdc.h_pulse_width = var->hsync_len;
-	pinfo->clk_rate = var->pixclock;
+
+	if (var->sync & FB_SYNC_HOR_HIGH_ACT)
+		pinfo->lcdc.h_polarity = 0;
+	else
+		pinfo->lcdc.h_polarity = 1;
+
+	if (var->sync & FB_SYNC_VERT_HIGH_ACT)
+		pinfo->lcdc.v_polarity = 0;
+	else
+		pinfo->lcdc.v_polarity = 1;
+
+	/*
+	 * if greater than 1M, then rate would fall below 1mhz which is not
+	 * even supported. In this case it means clock rate is actually
+	 * passed directly in hz.
+	 */
+	if (var->pixclock > SZ_1M)
+		pinfo->clk_rate = var->pixclock;
+	else
+		pinfo->clk_rate = PICOS2KHZ(var->pixclock) * 1000;
 }
 
 static void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
 						struct fb_var_screeninfo *var)
 {
-	struct mdss_panel_data *pdata = container_of(pinfo,
-				struct mdss_panel_data, panel_info);
-
-	var->xres = mdss_fb_get_panel_xres(&pdata->panel_info);
+	var->xres = mdss_fb_get_panel_xres(pinfo);
 	var->yres = pinfo->yres;
 	var->lower_margin = pinfo->lcdc.v_front_porch;
 	var->upper_margin = pinfo->lcdc.v_back_porch;
@@ -3031,7 +3177,12 @@ static void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
 	var->right_margin = pinfo->lcdc.h_front_porch;
 	var->left_margin = pinfo->lcdc.h_back_porch;
 	var->hsync_len = pinfo->lcdc.h_pulse_width;
-	var->pixclock = pinfo->clk_rate;
+	var->pixclock = KHZ2PICOS(pinfo->clk_rate / 1000);
+
+	if (pinfo->physical_width)
+		var->width = pinfo->physical_width;
+	if (pinfo->physical_height)
+		var->height = pinfo->physical_height;
 }
 
 /**
@@ -3118,14 +3269,9 @@ static int __mdss_fb_display_thread(void *data)
 				mfd->index);
 
 	while (1) {
-		ret = wait_event_interruptible(mfd->commit_wait_q,
+		wait_event(mfd->commit_wait_q,
 				(atomic_read(&mfd->commits_pending) ||
 				 kthread_should_stop()));
-
-		if (ret) {
-			pr_info("%s: interrupted", __func__);
-			continue;
-		}
 
 		if (kthread_should_stop())
 			break;
@@ -3224,13 +3370,6 @@ static int mdss_fb_check_var(struct fb_var_screeninfo *var,
 	if ((var->xres_virtual <= 0) || (var->yres_virtual <= 0))
 		return -EINVAL;
 
-	if (info->fix.smem_start) {
-		u32 len = var->xres_virtual * var->yres_virtual *
-			(var->bits_per_pixel / 8);
-		if (len > info->fix.smem_len)
-			return -EINVAL;
-	}
-
 	if ((var->xres == 0) || (var->yres == 0))
 		return -EINVAL;
 
@@ -3240,7 +3379,13 @@ static int mdss_fb_check_var(struct fb_var_screeninfo *var,
 	if (var->yoffset > (var->yres_virtual - var->yres))
 		return -EINVAL;
 
-	if (mfd->panel_info) {
+	if (info->mode) {
+		const struct fb_videomode *mode;
+
+		mode = fb_match_mode(var, &info->modelist);
+		if (mode == NULL)
+			return -EINVAL;
+	} else if (mfd->panel_info && !(var->activate & FB_ACTIVATE_TEST)) {
 		int rc;
 
 		memcpy(&mfd->reconfig_panel_info, mfd->panel_info,
@@ -3254,6 +3399,66 @@ static int mdss_fb_check_var(struct fb_var_screeninfo *var,
 	}
 
 	return 0;
+}
+
+static int mdss_fb_videomode_switch(struct msm_fb_data_type *mfd,
+		const struct fb_videomode *mode)
+{
+	int ret;
+	struct mdss_panel_data *pdata, *tmp;
+	struct mdss_panel_timing *timing;
+
+	pdata = dev_get_platdata(&mfd->pdev->dev);
+	if (!pdata) {
+		pr_err("no panel connected\n");
+		return -ENODEV;
+	}
+
+	/* make sure that we are idle while switching */
+	mdss_fb_wait_for_kickoff(mfd);
+
+	pr_debug("fb%d: changing display mode to %s\n", mfd->index, mode->name);
+
+	tmp = pdata;
+	do {
+		if (!tmp->event_handler) {
+			pr_warn("no event handler for panel\n");
+			continue;
+		}
+		timing = mdss_panel_get_timing_by_name(tmp, mode->name);
+		ret = tmp->event_handler(tmp,
+				MDSS_EVENT_PANEL_TIMING_SWITCH, timing);
+
+		tmp->active = timing != NULL;
+		tmp = tmp->next;
+	} while (tmp && !ret);
+
+	if (!ret && mfd->mdp.configure_panel) {
+		int dest_ctrl = 1;
+
+		/* todo: currently assumes no changes in video/cmd mode */
+		if (!mdss_fb_is_power_off(mfd)) {
+			mutex_lock(&mfd->switch_lock);
+			mfd->switch_state = MDSS_MDP_WAIT_FOR_PREP;
+			mfd->switch_new_mode = SWITCH_RESOLUTION;
+			mutex_unlock(&mfd->switch_lock);
+			dest_ctrl = 0;
+		}
+		ret = mfd->mdp.configure_panel(mfd,
+				pdata->panel_info.mipi.mode, dest_ctrl);
+	}
+
+	if (!ret) {
+		if (pdata->next && pdata->next->active)
+			mfd->split_mode = MDP_DUAL_LM_DUAL_DISPLAY;
+		else
+			mfd->split_mode = MDP_SPLIT_MODE_NONE;
+		mdss_fb_validate_split(0, 0, mfd);
+	}
+
+	pr_debug("fb%d: %s mode change complete\n", mfd->index, mode->name);
+
+	return ret;
 }
 
 static int mdss_fb_set_par(struct fb_info *info)
@@ -3312,6 +3517,24 @@ static int mdss_fb_set_par(struct fb_info *info)
 		return -EINVAL;
 	}
 
+	if (info->mode) {
+		const struct fb_videomode *mode;
+
+		mode = fb_match_mode(var, &info->modelist);
+		if (!mode)
+			return -EINVAL;
+
+		pr_debug("found mode: %s\n", mode->name);
+
+		if (fb_mode_is_equal(mode, info->mode)) {
+			pr_debug("mode is equal to current mode\n");
+			return 0;
+		}
+
+		ret = mdss_fb_videomode_switch(mfd, mode);
+		if (ret)
+			return ret;
+	}
 
 	if (mfd->mdp.fb_stride)
 		mfd->fbi->fix.line_length = mfd->mdp.fb_stride(mfd->index,
@@ -3320,8 +3543,10 @@ static int mdss_fb_set_par(struct fb_info *info)
 	else
 		mfd->fbi->fix.line_length = var->xres * var->bits_per_pixel / 8;
 
-	mfd->fbi->fix.smem_len = PAGE_ALIGN(mfd->fbi->fix.line_length *
-					mfd->fbi->var.yres) * mfd->fb_page;
+	/* if memory is not allocated yet, change memory size for fb */
+	if (!info->fix.smem_start)
+		mfd->fbi->fix.smem_len = PAGE_ALIGN(mfd->fbi->fix.line_length *
+				mfd->fbi->var.yres) * mfd->fb_page;
 
 	if (mfd->panel_reconfig || (mfd->fb_imgType != old_imgType)) {
 		mdss_fb_blank_sub(FB_BLANK_POWERDOWN, info, mfd->op_enable);
@@ -3753,22 +3978,23 @@ static int __ioctl_wait_idle(struct msm_fb_data_type *mfd, u32 cmd)
 int __ioctl_transition_dyn_mode_state(struct msm_fb_data_type *mfd,
 		unsigned int cmd)
 {
-
-	if (cmd == MDSS_MDP_NO_UPDATE_REQUESTED)
+	if (mfd->switch_state == MDSS_MDP_NO_UPDATE_REQUESTED)
 		return 0;
 
 	mutex_lock(&mfd->switch_lock);
 	switch (cmd) {
 	case MSMFB_BUFFER_SYNC:
 		if (mfd->switch_state == MDSS_MDP_WAIT_FOR_SYNC) {
-			mdss_fb_set_mdp_sync_pt_threshold(mfd,
-				mfd->switch_new_mode);
+			if (mfd->switch_new_mode != SWITCH_RESOLUTION)
+				mdss_fb_set_mdp_sync_pt_threshold(mfd,
+						mfd->switch_new_mode);
 			mfd->switch_state = MDSS_MDP_WAIT_FOR_COMMIT;
 		}
 		break;
 	case MSMFB_OVERLAY_PREPARE:
 		if (mfd->switch_state == MDSS_MDP_WAIT_FOR_PREP) {
-			mfd->mdp.pend_mode_switch(mfd, true);
+			if (mfd->switch_new_mode != SWITCH_RESOLUTION)
+				mfd->mdp.pend_mode_switch(mfd, true);
 			mfd->switch_state = MDSS_MDP_WAIT_FOR_SYNC;
 		}
 	}
@@ -3974,6 +4200,7 @@ int mdss_register_panel(struct platform_device *pdev,
 		goto mdss_notfound;
 	}
 
+	pdata->active = true;
 	fb_pdev = of_find_device_by_node(node);
 	if (fb_pdev) {
 		rc = mdss_fb_register_extra_panel(fb_pdev, pdata);

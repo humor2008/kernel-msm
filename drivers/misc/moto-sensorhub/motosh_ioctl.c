@@ -67,8 +67,9 @@ long motosh_misc_ioctl(struct file *file, unsigned int cmd,
 	int chk;
 #endif
 
-	if (mutex_lock_interruptible(&ps_motosh->lock) != 0)
-		return -EINTR;
+	err = mutex_lock_interruptible(&ps_motosh->lock);
+	if (err != 0)
+		return err;
 
 	motosh_wake(ps_motosh);
 
@@ -216,21 +217,6 @@ long motosh_misc_ioctl(struct file *file, unsigned int cmd,
 		motosh_g_gyro_delay = delay;
 		if (ps_motosh->mode > BOOTMODE)
 			err = motosh_i2c_write(ps_motosh, cmdbuff, 2);
-		break;
-	case MOTOSH_IOCTL_SET_STEP_COUNTER_DELAY:
-		delay = 0;
-		if (copy_from_user(&delay, argp, sizeof(delay))) {
-			dev_dbg(&ps_motosh->client->dev,
-				"Copy step counter delay returned error\n");
-			err = -EFAULT;
-			break;
-		}
-		cmdbuff[0] = STEP_COUNTER_UPDATE_RATE;
-		cmdbuff[1] = (delay>>8);
-		cmdbuff[2] = delay;
-		motosh_g_step_counter_delay = delay;
-		if (ps_motosh->mode > BOOTMODE)
-			err = motosh_i2c_write(ps_motosh, cmdbuff, 3);
 		break;
 	case MOTOSH_IOCTL_SET_PRES_DELAY:
 		dev_dbg(&ps_motosh->client->dev,
@@ -797,12 +783,17 @@ long motosh_misc_ioctl(struct file *file, unsigned int cmd,
 			break;
 		}
 
-		if (byte)
+		if (byte) {
+			/* Check for any touch configuration updates
+			 * and if needed write them to the sensorhub */
+			motosh_check_touch_config_locked(NORMAL_CHECK);
+
 			motosh_vote_aod_enabled_locked(ps_motosh,
 				AOD_QP_ENABLED_VOTE_USER, true);
-		else
+		} else {
 			motosh_vote_aod_enabled_locked(ps_motosh,
 				AOD_QP_ENABLED_VOTE_USER, false);
+		}
 		motosh_resolve_aod_enabled_locked(ps_motosh);
 		/* the user's vote can not fail */
 		err = 0;

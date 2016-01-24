@@ -32,6 +32,7 @@
 #define KGSL_PWRFLAGS_CLK_ON   1
 #define KGSL_PWRFLAGS_AXI_ON   2
 #define KGSL_PWRFLAGS_IRQ_ON   3
+#define KGSL_PWRFLAGS_WAKEUP_PWRLEVEL  24
 
 #define UPDATE_BUSY_VAL		1000000
 
@@ -52,10 +53,6 @@
 
 #define DEFAULT_BUS_P 25
 #define DEFAULT_BUS_DIV (100 / DEFAULT_BUS_P)
-
-#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
-int graphics_boost = 4;
-#endif
 
 struct clk_pair {
 	const char *name;
@@ -372,6 +369,14 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 					device->pwrscale.popp_level);
 
 	/*
+	 * When waking up from SLUMBER at turbo then set the pwrlevel
+	 * to one level below turbo
+	 */
+	if (new_level == 0 && test_bit(KGSL_PWRFLAGS_WAKEUP_PWRLEVEL,
+		&device->pwrctrl.ctrl_flags))
+		new_level = 1;
+
+	/*
 	 * If thermal cycling is required and the new level hits the
 	 * thermal limit, kick off the cycling.
 	 */
@@ -412,11 +417,7 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 	kgsl_pwrctrl_pwrlevel_change_settings(device, 1, 0);
 
 	/* Timestamp the frequency change */
-
-#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
-        graphics_boost = pwr->active_pwrlevel;
-#endif
-	
+	device->pwrscale.freq_change_time = ktime_to_ms(ktime_get());
 }
 EXPORT_SYMBOL(kgsl_pwrctrl_pwrlevel_change);
 
@@ -746,19 +747,12 @@ static ssize_t kgsl_pwrctrl_gpuclk_show(struct device *dev,
 				    struct device_attribute *attr,
 				    char *buf)
 {
-	unsigned long freq;
 	struct kgsl_device *device = kgsl_device_from_dev(dev);
 	struct kgsl_pwrctrl *pwr;
 	if (device == NULL)
 		return 0;
 	pwr = &device->pwrctrl;
-
-	if (device->state == KGSL_STATE_SLUMBER)
-		freq = pwr->pwrlevels[pwr->num_pwrlevels - 1].gpu_freq;
-	else
-		freq = kgsl_pwrctrl_active_freq(pwr);
-
-	return snprintf(buf, PAGE_SIZE, "%lu\n", freq);
+	return snprintf(buf, PAGE_SIZE, "%ld\n", kgsl_pwrctrl_active_freq(pwr));
 }
 
 static ssize_t kgsl_pwrctrl_idle_timer_store(struct device *dev,
@@ -1933,7 +1927,16 @@ _aware(struct kgsl_device *device)
 		del_timer_sync(&device->idle_timer);
 		break;
 	case KGSL_STATE_SLUMBER:
+		/*
+		 * Set this flag to avoid waking up at turbo
+		 * because wakeup at turbo is not stable
+		 * on some slow parts
+		 */
+		set_bit(KGSL_PWRFLAGS_WAKEUP_PWRLEVEL,
+				&device->pwrctrl.ctrl_flags);
 		status = kgsl_pwrctrl_enable(device);
+		clear_bit(KGSL_PWRFLAGS_WAKEUP_PWRLEVEL,
+				&device->pwrctrl.ctrl_flags);
 		break;
 	default:
 		status = -EINVAL;

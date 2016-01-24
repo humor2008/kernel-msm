@@ -28,8 +28,8 @@
 #include "sd_ops.h"
 
 #define PARANOID_SD_INIT_RETRIES	5
-#define PARANOID_SD_INIT_DELAY		5000
-#define PARANOID_SD_INIT_INCREMENT	10000
+#define PARANOID_SD_INIT_DELAY		50000
+#define PARANOID_SD_INIT_INCREMENT	50000
 
 #define UHS_SDR104_MIN_DTR	(100 * 1000 * 1000)
 #define UHS_DDR50_MIN_DTR	(50 * 1000 * 1000)
@@ -1396,6 +1396,7 @@ static const struct mmc_bus_ops mmc_sd_ops = {
 	.power_restore = mmc_sd_power_restore,
 	.alive = mmc_sd_alive,
 	.change_bus_speed = mmc_sd_change_bus_speed,
+	.shutdown = mmc_sd_suspend,
 	.throttle_back = mmc_sd_throttle_back,
 };
 
@@ -1407,6 +1408,7 @@ static const struct mmc_bus_ops mmc_sd_ops_unsafe = {
 	.power_restore = mmc_sd_power_restore,
 	.alive = mmc_sd_alive,
 	.change_bus_speed = mmc_sd_change_bus_speed,
+	.shutdown = mmc_sd_suspend,
 	.throttle_back = mmc_sd_throttle_back,
 };
 

@@ -22,6 +22,7 @@
 #define MSM_VDEC_DVC_NAME "msm_vdec_8974"
 #define MIN_NUM_OUTPUT_BUFFERS 4
 #define MIN_NUM_CAPTURE_BUFFERS 6
+#define MIN_NUM_THUMBNAIL_MODE_CAPTURE_BUFFERS 1
 #define MAX_NUM_OUTPUT_BUFFERS VB2_MAX_FRAME
 #define DEFAULT_VIDEO_CONCEAL_COLOR_BLACK 0x8010
 #define MB_SIZE_IN_PIXEL (16 * 16)
@@ -521,6 +522,26 @@ static struct msm_vidc_ctrl msm_vdec_ctrls[] = {
 		.default_value = 0,
 		.step = 1,
 		.menu_skip_mask = 0,
+		.qmenu = NULL,
+	},
+	{
+		.id = V4L2_CID_MPEG_VIDC_VIDEO_PRIORITY,
+		.name = "Session Priority",
+		.type = V4L2_CTRL_TYPE_INTEGER,
+		.minimum = V4L2_MPEG_VIDC_VIDEO_PRIORITY_REALTIME_ENABLE,
+		.maximum = V4L2_MPEG_VIDC_VIDEO_PRIORITY_REALTIME_DISABLE,
+		.default_value = V4L2_MPEG_VIDC_VIDEO_PRIORITY_REALTIME_DISABLE,
+		.step = 1,
+		.qmenu = NULL,
+	},
+	{
+		.id = V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE,
+		.name = "Set Decoder Operating rate",
+		.type = V4L2_CTRL_TYPE_INTEGER,
+		.minimum = 0,
+		.maximum = 300 << 16,  /* 300 fps in Q16 format*/
+		.default_value = 0,
+		.step = 1,
 		.qmenu = NULL,
 	},
 };
@@ -1361,6 +1382,8 @@ static int msm_vdec_queue_setup(struct vb2_queue *q,
 	struct hfi_device *hdev;
 	struct hal_buffer_count_actual new_buf_count;
 	enum hal_property property_id;
+	int min_buff_count = 0;
+
 	if (!q || !num_buffers || !num_planes
 		|| !sizes || !q->drv_priv) {
 		dprintk(VIDC_ERR, "Invalid input, q = %p, %p, %p\n",
@@ -1424,18 +1447,12 @@ static int msm_vdec_queue_setup(struct vb2_queue *q,
 		}
 		*num_buffers = max(*num_buffers, bufreq->buffer_count_min);
 
-		if ((*num_buffers < MIN_NUM_CAPTURE_BUFFERS ||
-			*num_buffers > VB2_MAX_FRAME) &&
-			(inst->fmts[OUTPUT_PORT]->fourcc ==
-				V4L2_PIX_FMT_H264)) {
-			int temp = *num_buffers;
-			*num_buffers = clamp_val(*num_buffers,
-					MIN_NUM_CAPTURE_BUFFERS,
-					VB2_MAX_FRAME);
-			dprintk(VIDC_INFO,
-				"Updating CAPTURE_MPLANE buffer count from %d -> %d\n",
-				temp, *num_buffers);
-		}
+		min_buff_count = (!!(inst->flags & VIDC_THUMBNAIL)) ?
+			MIN_NUM_THUMBNAIL_MODE_CAPTURE_BUFFERS :
+			MIN_NUM_CAPTURE_BUFFERS;
+
+		*num_buffers = clamp_val(*num_buffers,
+			min_buff_count, VB2_MAX_FRAME);
 
 		if (*num_buffers != bufreq->buffer_count_actual) {
 			property_id = HAL_PARAM_BUFFER_COUNT_ACTUAL;
@@ -2063,7 +2080,6 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 			break;
 		}
 
-		msm_comm_scale_clocks_and_bus(inst);
 		break;
 	case V4L2_CID_MPEG_VIDC_VIDEO_ALLOC_MODE_INPUT:
 		if (ctrl->val == V4L2_MPEG_VIDC_VIDEO_DYNAMIC) {
@@ -2233,6 +2249,14 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		dprintk(VIDC_DBG, "%s non_secure output2\n",
 			ctrl->val ? "Enabling" : "Disabling");
 		pdata = &hal_property;
+		break;
+	case V4L2_CID_MPEG_VIDC_VIDEO_PRIORITY:
+		property_id = HAL_CONFIG_REALTIME;
+		hal_property.enable = ctrl->val;
+		pdata = &hal_property;
+		break;
+	case V4L2_CID_MPEG_VIDC_VIDEO_OPERATING_RATE:
+		property_id = 0;
 		break;
 	default:
 		break;

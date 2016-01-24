@@ -23,6 +23,11 @@
 #define SYNAPTICS_DSX_DRIVER_VERSION "DSX 1.1"
 
 #include <linux/version.h>
+#include <linux/ktime.h>
+#if defined(USB_CHARGER_DETECTION)
+#include <linux/usb.h>
+#include <linux/power_supply.h>
+#endif
 #if defined(CONFIG_MMI_PANEL_NOTIFICATIONS)
 #include <linux/mmi_panel_notifier.h>
 #elif defined(CONFIG_FB)
@@ -292,6 +297,7 @@ enum exp_fn {
 	RMI_F34,
 	RMI_F54,
 	RMI_FW_UPDATER,
+	RMI_CTRL_ACCESS_BLK,
 	RMI_LAST,
 };
 
@@ -377,6 +383,10 @@ struct synaptics_rmi4_func_packet_regs {
 	struct synaptics_rmi4_packet_reg *regs;
 };
 
+struct synaptics_clip_area {
+	unsigned xul_clip, yul_clip, xbr_clip, ybr_clip;
+};
+
 /*
  * struct synaptics_rmi4_data - rmi4 device instance data
  * @i2c_client: pointer to associated i2c client
@@ -439,6 +449,7 @@ struct synaptics_rmi4_data {
 	unsigned char num_of_rx;
 	unsigned char num_of_tx;
 	unsigned char num_of_fingers;
+	unsigned char aod_mt;
 	unsigned char f01_ctrl_register_0;
 	unsigned char intr_mask[MAX_INTR_REGISTERS];
 	unsigned short num_of_intr_regs;
@@ -459,6 +470,7 @@ struct synaptics_rmi4_data {
 	bool input_registered;
 	bool in_bootloader;
 	bool purge_enabled;
+	bool charger_detection;
 	wait_queue_head_t wait;
 	int (*i2c_read)(struct synaptics_rmi4_data *pdata, unsigned short addr,
 			unsigned char *data, unsigned short length);
@@ -488,7 +500,47 @@ struct synaptics_rmi4_data {
 
 	struct synaptics_rmi4_func_packet_regs *f12_data_registers_ptr;
 	struct notifier_block rmi_reboot;
+#if defined(USB_CHARGER_DETECTION)
+	struct power_supply psy;
+#endif
+	bool clipping_on;
+	struct synaptics_clip_area *clipa;
 };
+
+struct time_keeping {
+	int id;
+	unsigned long long duration;
+} __packed;
+
+struct statistics {
+	int		active;	/* current index within keeper array */
+	int		max;	/* keeper array dimension */
+	bool		clk_run;/* flag to indicate whether clock is ticking */
+	unsigned int	flags;	/* time keeping flags */
+	unsigned char	abbr;	/* abbreviation letter */
+	ktime_t		start;	/* time notch */
+	struct time_keeping keeper[0];
+} __packed;
+
+enum {
+	FREQ_DURATION,		/* scanning frequencies duration */
+	FREQ_HOPPING,		/* scanning frequencies hopping */
+	MODE_NMS,		/* noise mitigation mode */
+	MODE_METAL_PLATE,	/* metal plate detection */
+	STATISTICS_MAX
+};
+
+struct synaptics_dsx_stats {
+	bool enabled;
+	ktime_t	uptime;
+	bool uptime_run;
+	unsigned long long uptime_dur;
+	struct statistics *stats[STATISTICS_MAX];
+#define dur stats[FREQ_DURATION]
+#define hop stats[FREQ_HOPPING]
+#define nms stats[MODE_NMS]
+#define mpd stats[MODE_METAL_PLATE]
+} __packed;
 
 struct synaptics_rmi4_exp_fn_ptr {
 	int (*read)(struct synaptics_rmi4_data *rmi4_data, unsigned short addr,
@@ -525,6 +577,12 @@ int synaptics_rmi4_scan_f54_ctrl_reg_info(
 
 int synaptics_rmi4_scan_f54_cmd_reg_info(
 	struct synaptics_rmi4_func_packet_regs *regs);
+
+int synaptics_rmi4_scan_f54_data_reg_info(
+	struct synaptics_rmi4_func_packet_regs *regs);
+
+int synaptics_rmi4_scan_f54_query_reg_info(
+	struct synaptics_rmi4_func_packet_regs *regs);
 #else
 static inline int synaptics_rmi4_scan_f54_ctrl_reg_info(
 	struct synaptics_rmi4_func_packet_regs *regs) {
@@ -532,6 +590,16 @@ static inline int synaptics_rmi4_scan_f54_ctrl_reg_info(
 }
 
 static inline int synaptics_rmi4_scan_f54_cmd_reg_info(
+	struct synaptics_rmi4_func_packet_regs *regs) {
+	return -ENOSYS;
+}
+
+static inline int synaptics_rmi4_scan_f54_data_reg_info(
+	struct synaptics_rmi4_func_packet_regs *regs) {
+	return -ENOSYS;
+}
+
+static inline int synaptics_rmi4_scan_f54_query_reg_info(
 	struct synaptics_rmi4_func_packet_regs *regs) {
 	return -ENOSYS;
 }

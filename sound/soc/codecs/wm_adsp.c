@@ -1857,6 +1857,7 @@ out_async:
 	}
 
 out_fw:
+	regmap_async_complete(regmap);
 	release_firmware(firmware);
 	wm_adsp_buf_free(&buf_list);
 out:
@@ -2462,6 +2463,8 @@ void wm_adsp_get_caps(const struct wm_adsp *adsp,
 	}
 }
 EXPORT_SYMBOL_GPL(wm_adsp_get_caps);
+
+MODULE_LICENSE("GPL v2");
 
 static int wm_adsp_read_data_block(struct wm_adsp *adsp, int mem_type,
 				   unsigned int mem_addr,

@@ -371,13 +371,6 @@ int __ref cpu_down(unsigned int cpu)
 
 	cpu_maps_update_begin();
 
-	// AP: Keep CPU core 0 on
-	if (cpu == 0)
-	{
-		err = -EBUSY;
-		goto out;
-	}
-
 	if (cpu_hotplug_disabled) {
 		err = -EBUSY;
 		goto out;

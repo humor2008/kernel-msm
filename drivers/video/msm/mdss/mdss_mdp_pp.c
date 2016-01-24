@@ -1438,9 +1438,9 @@ int mdss_mdp_pipe_sspp_setup(struct mdss_mdp_pipe *pipe, u32 *op)
 }
 
 static int pp_mixer_setup(u32 disp_num,
-		struct mdss_mdp_mixer *mixer)
+		struct mdss_mdp_mixer *mixer, u32 flags)
 {
-	u32 flags, mixer_num, opmode = 0, lm_bitmask = 0;
+	u32 mixer_num, opmode = 0, lm_bitmask = 0;
 	struct mdp_pgc_lut_data *pgc_config;
 	struct pp_sts_type *pp_sts;
 	struct mdss_mdp_ctl *ctl;
@@ -1468,7 +1468,6 @@ static int pp_mixer_setup(u32 disp_num,
 		return 0;
 	}
 
-	flags = mdss_pp_res->pp_disp_flags[disp_num];
 	pp_sts = &mdss_pp_res->pp_disp_sts[disp_num];
 	/* GC_LUT is in layer mixer */
 	if (flags & PP_FLAGS_DIRTY_ARGC) {
@@ -1689,9 +1688,9 @@ static void pp_dspp_opmode_config(struct mdss_mdp_ctl *ctl, u32 num,
 		*opmode |= MDSS_MDP_DSPP_OP_ARGC_LUT_EN;
 }
 
-static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer)
+static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer, u32 flags)
 {
-	u32 ad_flags, flags, dspp_num, opmode = 0, ad_bypass;
+	u32 ad_flags, dspp_num, opmode = 0, ad_bypass;
 	struct mdp_pgc_lut_data *pgc_config;
 	struct pp_sts_type *pp_sts;
 	char __iomem *base, *addr;
@@ -1720,11 +1719,6 @@ static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer)
 	ret = pp_hist_setup(&opmode, MDSS_PP_DSPP_CFG | dspp_num, mixer);
 	if (ret)
 		goto dspp_exit;
-
-	if (disp_num < MDSS_BLOCK_DISP_NUM)
-		flags = mdss_pp_res->pp_disp_flags[disp_num];
-	else
-		flags = 0;
 
 	mixer_cnt = mdss_mdp_get_ctl_mixers(disp_num, mixer_id);
 	if (dspp_num < mdata->nad_cfgs && disp_num < mdata->nad_cfgs &&
@@ -1846,6 +1840,27 @@ error:
 	return ret;
 }
 
+static bool is_full_screen_update(struct mdss_mdp_ctl *ctl)
+{
+	if (ctl->mfd->panel_info->type != MIPI_CMD_PANEL ||
+			!ctl->panel_data->panel_info.partial_update_enabled)
+		return true;
+
+	if (ctl->mixer_left && (ctl->mixer_left->roi.x != 0 ||
+			ctl->mixer_left->roi.y != 0 ||
+			ctl->mixer_left->roi.w < ctl->mixer_left->width ||
+			ctl->mixer_left->roi.h < ctl->mixer_left->height))
+		return false;
+
+	if (ctl->mixer_right && (ctl->mixer_right->roi.x != 0 ||
+			ctl->mixer_right->roi.y != 0 ||
+			ctl->mixer_right->roi.w < ctl->mixer_right->width ||
+			ctl->mixer_right->roi.h < ctl->mixer_right->height))
+		return false;
+
+	return true;
+}
+
 int mdss_mdp_pp_setup_locked(struct mdss_mdp_ctl *ctl)
 {
 	struct mdss_data_type *mdata = ctl->mdata;
@@ -1903,7 +1918,11 @@ int mdss_mdp_pp_setup_locked(struct mdss_mdp_ctl *ctl)
 
 	mutex_lock(&mdss_pp_mutex);
 
-	flags = mdss_pp_res->pp_disp_flags[disp_num];
+	if (is_full_screen_update(ctl))
+		flags = mdss_pp_res->pp_disp_flags[disp_num];
+	else
+		flags = 0;
+
 	if (!wb_mixer)
 		pa_v2_flags = mdss_pp_res->pa_v2_disp_cfg[disp_num].flags;
 	else
@@ -1925,16 +1944,17 @@ int mdss_mdp_pp_setup_locked(struct mdss_mdp_ctl *ctl)
 	}
 
 	if (ctl->mixer_left) {
-		pp_mixer_setup(disp_num, ctl->mixer_left);
-		pp_dspp_setup(disp_num, ctl->mixer_left);
+		pp_mixer_setup(disp_num, ctl->mixer_left, flags);
+		pp_dspp_setup(disp_num, ctl->mixer_left, flags);
 	}
 	if (ctl->mixer_right) {
-		pp_mixer_setup(disp_num, ctl->mixer_right);
-		pp_dspp_setup(disp_num, ctl->mixer_right);
+		pp_mixer_setup(disp_num, ctl->mixer_right, flags);
+		pp_dspp_setup(disp_num, ctl->mixer_right, flags);
 	}
 	/* clear dirty flag */
 	if (disp_num < MDSS_MAX_MIXER_DISP_NUM) {
-		mdss_pp_res->pp_disp_flags[disp_num] = 0;
+		if (flags)
+			mdss_pp_res->pp_disp_flags[disp_num] = 0;
 		if (disp_num < mdata->nad_cfgs)
 			mdata->ad_cfgs[disp_num].reg_sts = 0;
 	}
@@ -2169,20 +2189,6 @@ void mdss_mdp_pp_term(struct device *dev)
 		mdss_pp_res = NULL;
 		mutex_unlock(&mdss_pp_mutex);
 	}
-}
-
-int mdss_mdp_pp_override_pu(int enable)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-
-	if (!mdata)
-		return -EPERM;
-
-	if ((enable != MDP_PP_ENABLE) && (enable != MDP_PP_DISABLE))
-		return -EINVAL;
-
-	mdata->pp_enable = enable;
-	return 0;
 }
 
 int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
@@ -3612,6 +3618,7 @@ int mdss_mdp_hist_start(struct mdp_histogram_start_req *req)
 				goto hist_stop_clk;
 			}
 			hist_info = &mdss_pp_res->dspp_hist[dspp_num];
+			hist_info->disp_num = PP_BLOCK(req->block);
 			ret = pp_hist_enable(hist_info, req);
 			mdss_pp_res->pp_disp_flags[disp_num] |=
 							PP_FLAGS_DIRTY_HIST_COL;
@@ -3665,34 +3672,14 @@ static int pp_hist_stop_wrapper(struct msm_fb_data_type *mfd)
 int mdss_mdp_hist_stop(u32 block)
 {
 	int i, ret = 0;
-	u32 dspp_num, disp_num;
+	u32 disp_num;
 	struct pp_hist_col_info *hist_info;
-	u32 mixer_cnt, mixer_id[MDSS_MDP_INTF_MAX_LAYERMIXER];
 	struct mdss_mdp_pipe *pipe;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-
-	if ((PP_BLOCK(block) < MDP_LOGICAL_BLOCK_DISP_0) ||
-		(PP_BLOCK(block) >= MDP_BLOCK_MAX))
-		return -EINVAL;
 
 	if (!mdata)
 		return -EPERM;
 
-	disp_num = PP_BLOCK(block) - MDP_LOGICAL_BLOCK_DISP_0;
-	mixer_cnt = mdss_mdp_get_ctl_mixers(disp_num, mixer_id);
-
-	if (!mixer_cnt) {
-		pr_err("%s, no dspp connects to disp %d\n",
-			__func__, disp_num);
-		ret = -EPERM;
-		goto hist_stop_exit;
-	}
-	if (mixer_cnt > mdata->nmixers_intf) {
-		pr_err("%s, Too many dspp connects to disp %d\n",
-			__func__, mixer_cnt);
-		ret = -EPERM;
-		goto hist_stop_exit;
-	}
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 	if (PP_LOCAT(block) == MDSS_PP_SSPP_CFG) {
 		i = MDSS_PP_ARG_MASK & block;
@@ -3720,24 +3707,28 @@ int mdss_mdp_hist_stop(u32 block)
 				goto hist_stop_clk;
 		}
 	} else if (PP_LOCAT(block) == MDSS_PP_DSPP_CFG) {
-		for (i = 0; i < mixer_cnt; i++) {
-			dspp_num = mixer_id[i];
-			if (dspp_num >= mdata->ndspp) {
-				ret = -EINVAL;
-				pr_warn("Invalid dspp num %d\n", dspp_num);
-				goto hist_stop_clk;
-			}
-			hist_info = &mdss_pp_res->dspp_hist[dspp_num];
+		if ((PP_BLOCK(block) < MDP_LOGICAL_BLOCK_DISP_0) ||
+				(PP_BLOCK(block) >= MDP_BLOCK_MAX)) {
+			pr_err("Invalid logical disp block %d\n",
+				 PP_BLOCK(block));
+			ret = -EINVAL;
+			goto hist_stop_clk;
+		}
+		disp_num = PP_BLOCK(block);
+		for (i = 0; i < mdata->ndspp; i++) {
+			hist_info = &mdss_pp_res->dspp_hist[i];
+			if (disp_num != hist_info->disp_num)
+				continue;
 			ret = pp_hist_disable(hist_info);
+			hist_info->disp_num = 0;
 			if (ret)
 				goto hist_stop_clk;
-			mdss_pp_res->pp_disp_flags[disp_num] |=
-							PP_FLAGS_DIRTY_HIST_COL;
+			mdss_pp_res->pp_disp_flags[i] |=
+				PP_FLAGS_DIRTY_HIST_COL;
 		}
 	}
 hist_stop_clk:
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
-hist_stop_exit:
 	return ret;
 }
 
@@ -4968,9 +4959,11 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 	int ret = 0;
 	struct mdss_ad_info *ad;
 	struct mdss_mdp_ctl *ctl = mfd_to_ctl(mfd);
+	struct mdss_mdp_ctl *sctl = mdss_mdp_get_split_ctl(ctl);
 	struct msm_fb_data_type *bl_mfd;
 	struct mdss_data_type *mdata;
 	u32 bypass = MDSS_PP_AD_BYPASS_DEF, bl;
+	u32 width;
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
 	if (ret) {
@@ -5046,15 +5039,18 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 		}
 	}
 
+	width = ctl->width;
+	if (sctl)
+		width += sctl->width;
+
 	/* update ad screen size if it has changed since last configuration */
-	if (mfd->panel_info->type == WRITEBACK_PANEL &&
-		(ad->init.frame_w != ctl->width ||
-			ad->init.frame_h != ctl->height)) {
+	if ((ad->init.frame_w != width) ||
+			(ad->init.frame_h != ctl->height)) {
 		pr_debug("changing from %dx%d to %dx%d\n", ad->init.frame_w,
 							ad->init.frame_h,
-							ctl->width,
+							width,
 							ctl->height);
-		ad->init.frame_w = ctl->width;
+		ad->init.frame_w = width;
 		ad->init.frame_h = ctl->height;
 		ad->reg_sts |= PP_AD_STS_DIRTY_INIT;
 	}
@@ -5154,6 +5150,7 @@ static void pp_ad_calc_worker(struct work_struct *work)
 	base = mdata->ad_off[ad->calc_hw_num].base;
 
 	if ((ad->cfg.mode == MDSS_AD_MODE_AUTO_STR) && (ad->last_bl == 0)) {
+		complete(&ad->comp);
 		mutex_unlock(&ad->lock);
 		return;
 	}
@@ -5697,6 +5694,9 @@ int mdss_mdp_calib_mode(struct msm_fb_data_type *mfd,
 		return -EINVAL;
 	mutex_lock(&mdss_pp_mutex);
 	mfd->calib_mode = cfg->calib_mask;
+	mutex_lock(&mfd->bl_lock);
+	mfd->calib_mode_bl = mfd->bl_level;
+	mutex_unlock(&mfd->bl_lock);
 	mutex_unlock(&mdss_pp_mutex);
 	return 0;
 }
