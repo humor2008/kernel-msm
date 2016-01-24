@@ -76,7 +76,6 @@ source "fs/quota/Kconfig"
 
 source "fs/autofs4/Kconfig"
 source "fs/fuse/Kconfig"
-source "fs/overlayfs/Kconfig"
 
 menu "Caches"
 
@@ -106,7 +105,6 @@ endif # BLOCK
 menu "Pseudo filesystems"
 
 source "fs/proc/Kconfig"
-source "fs/kernfs/Kconfig"
 source "fs/sysfs/Kconfig"
 
 config TMPFS
