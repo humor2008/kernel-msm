@@ -12,31 +12,23 @@ if [ -f arch/arm64/boot/Image ]
 then
 
 echo "generating device tree..."
-../build_clark_mm/dtbTool -2 -o ../build_clark_mm/dt.img -s 4096 -p ./scripts/dtc/ ./arch/arm/boot/dts/
+../build_clark_mm/dtbToolCM -o ../topack_clark_mm/dtb -s 4096 -p ./scripts/dtc/ ./arch/arm/boot/dts/
 
 ### copy zImage
-cp arch/arm64/boot/Image ../build_clark_mm/Image
+cp arch/arm64/boot/Image ../topack_clark_mm/zImage
 
 ### copy all modules
-find . -name "*.ko" -exec cp -v {} ../build_clark_mm/modules/ \;
+rm -rf ../topack_clark_mm/modules
+mkdir -p ../topack_clark_mm/modules
+find . -name "*.ko" -exec cp -v {} ../topack_clark_mm/modules/ \;
 
-cd ../build_clark_mm/
-
-~/android/build_clark_mm/make_it.sh
-
-cp boot.img ../topack_clark_mm/boot.img
-rm -rf ../topack_clark_mm/system/lib/modules
-cp -R modules ../topack_clark_mm/system/lib/
-
-mkdir -p ../topack_clark_mm/system/lib/modules/qca_cld/
-cp ../topack_clark_mm/system/lib/modules/wlan.ko ../topack_clark_mm/system/lib/modules/qca_cld/qca_cld_wlan.ko
+mkdir -p ../topack_clark_mm/modules/qca_cld/
+cp ../topack_clark_mm/modules/wlan.ko ../topack_clark_mm/modules/qca_cld/qca_cld_wlan.ko
 
 cd ../topack_clark_mm/
 
 rm XClark-*.zip
 
 zip -r9 XClark-v$1.zip *
-
-~/android/build_clark_mm/flash_it.sh
 
 fi
