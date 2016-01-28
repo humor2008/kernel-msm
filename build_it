@@ -1,3 +1,4 @@
+export CFLAGS="-DNAN=\"(0.0/0.0)\""
 CUR_TC=~/android/toolchains/stock_chain/bin/
 APPEND=aarch64-linux-android-
 
@@ -12,23 +13,17 @@ if [ -f arch/arm64/boot/Image ]
 then
 
 echo "generating device tree..."
-../build_clark_mm/dtbTool -2 -o ../topack_clark_mm/dtb -s 4096 -p ./scripts/dtc/ ./arch/arm/boot/dts/
+../build_clark_mm/dtbTool -2 -o ../topack_clark_cm/dtb -s 4096 -p ./scripts/dtc/ ./arch/arm/boot/dts/
 
 ### copy zImage
-cp arch/arm64/boot/Image ../topack_clark_mm/zImage
+cp arch/arm64/boot/Image ../topack_clark_cm/zImage
 
-### copy all modules
-rm -rf ../topack_clark_mm/modules
-mkdir -p ../topack_clark_mm/modules
-find . -name "*.ko" -exec cp -v {} ../topack_clark_mm/modules/ \;
-
-mkdir -p ../topack_clark_mm/modules/qca_cld/
-cp ../topack_clark_mm/modules/wlan.ko ../topack_clark_mm/modules/qca_cld/qca_cld_wlan.ko
-
-cd ../topack_clark_mm/
+cd ../topack_clark_cm/
 
 rm XClark-*.zip
 
 zip -r9 XClark-v$1.zip *
+
+cd ../stock_kernel
 
 fi
