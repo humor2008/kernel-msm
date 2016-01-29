@@ -73,7 +73,6 @@
 
 #include "sapInternal.h"
 #include "smeInside.h"
-#include "regdomain_common.h"
 
 /*----------------------------------------------------------------------------
  * Preprocessor Definitions and Constants
@@ -1301,10 +1300,16 @@ WLANSAP_ModifyACL
             {
                 if (staInWhiteList)
                 {
+                    struct tagCsrDelStaParams delStaParams;
+
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO, "Delete from white list");
                     sapRemoveMacFromACL(pSapCtx->acceptMacList, &pSapCtx->nAcceptMac, staWLIndex);
                     /* If a client is deleted from white list and the client is connected, send deauth*/
-                    WLANSAP_DeauthSta(pCtx, pPeerStaMac);
+                    WLANSAP_PopulateDelStaParams(pPeerStaMac,
+                                                  eCsrForcedDeauthSta,
+                                                  (SIR_MAC_MGMT_DEAUTH >> 4),
+                                                   &delStaParams);
+                    WLANSAP_DeauthSta(pCtx, &delStaParams);
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO_LOW, "size of accept and deny lists %d %d",
                             pSapCtx->nAcceptMac, pSapCtx->nDenyMac);
                 }
@@ -1345,6 +1350,7 @@ WLANSAP_ModifyACL
                             MAC_ADDR_ARRAY(pPeerStaMac));
                 } else
                 {
+                    struct tagCsrDelStaParams delStaParams;
                     if (staInWhiteList)
                     {
                         //remove it from white list before adding to the black list
@@ -1353,7 +1359,11 @@ WLANSAP_ModifyACL
                         sapRemoveMacFromACL(pSapCtx->acceptMacList, &pSapCtx->nAcceptMac, staWLIndex);
                     }
                     /* If we are adding a client to the black list; if its connected, send deauth */
-                    WLANSAP_DeauthSta(pCtx, pPeerStaMac);
+                    WLANSAP_PopulateDelStaParams(pPeerStaMac,
+                                                 eCsrForcedDeauthSta,
+                                                 (SIR_MAC_MGMT_DEAUTH >> 4),
+                                                 &delStaParams);
+                    WLANSAP_DeauthSta(pCtx, &delStaParams);
                     VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO,
                             "... Now add to black list");
                     sapAddMacToACL(pSapCtx->denyMacList, &pSapCtx->nDenyMac, pPeerStaMac);
@@ -1429,7 +1439,7 @@ VOS_STATUS
 WLANSAP_DisassocSta
 (
     v_PVOID_t pCtx,
-    v_U8_t *pPeerStaMac
+    struct tagCsrDelStaParams *pDelStaParams
 )
 {
     ptSapContext pSapCtx = VOS_GET_SAP_CB(pCtx);
@@ -1446,7 +1456,7 @@ WLANSAP_DisassocSta
     }
 
     sme_RoamDisconnectSta(VOS_GET_HAL_CB(pSapCtx->pvosGCtx), pSapCtx->sessionId,
-                            pPeerStaMac);
+                            pDelStaParams);
 
     return VOS_STATUS_SUCCESS;
 }
@@ -1467,7 +1477,8 @@ WLANSAP_DisassocSta
                   control block can be extracted from its context
                   When MBSSID feature is enabled, SAP context is directly
                   passed to SAP APIs
-    pPeerStaMac : Mac address of the station to deauthenticate
+    pDelStaParams       : Pointer to parameters of the station to
+                          deauthenticate
 
   RETURN VALUE
     The VOS_STATUS code associated with performing the operation
@@ -1480,7 +1491,7 @@ VOS_STATUS
 WLANSAP_DeauthSta
 (
     v_PVOID_t pCtx,
-    v_U8_t *pPeerStaMac
+    struct tagCsrDelStaParams *pDelStaParams
 )
 {
     eHalStatus halStatus = eHAL_STATUS_FAILURE;
@@ -1498,8 +1509,8 @@ WLANSAP_DeauthSta
         return vosStatus;
     }
 
-    halStatus = sme_RoamDeauthSta(VOS_GET_HAL_CB(pSapCtx->pvosGCtx), pSapCtx->sessionId,
-                            pPeerStaMac);
+    halStatus = sme_RoamDeauthSta(VOS_GET_HAL_CB(pSapCtx->pvosGCtx),
+                                  pSapCtx->sessionId, pDelStaParams);
 
     if (halStatus == eHAL_STATUS_SUCCESS)
     {
@@ -1540,10 +1551,6 @@ WLANSAP_SetChannelChangeWithCsa(v_PVOID_t pvosGCtx, v_U32_t targetChannel)
     tWLAN_SAPEvent sapEvent;
     tpAniSirGlobal pMac = NULL;
     v_PVOID_t hHal = NULL;
-#ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
-    bool valid;
-#endif
-    tSmeConfigParams  sme_config;
 
     sapContext = VOS_GET_SAP_CB( pvosGCtx );
     if (NULL == sapContext)
@@ -1563,30 +1570,29 @@ WLANSAP_SetChannelChangeWithCsa(v_PVOID_t pvosGCtx, v_U32_t targetChannel)
     pMac = PMAC_STRUCT( hHal );
 
     /*
+     * Validate if the new target channel is a valid
+     * 5 Ghz Channel. We prefer to move to another
+     * channel in 5 Ghz band.
+     */
+    if ( (targetChannel < rfChannels[RF_CHAN_36].channelNum)
+                             ||
+         (targetChannel > rfChannels[RF_CHAN_165].channelNum) )
+    {
+        VOS_TRACE( VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_ERROR,
+                   "%s: Invalid Channel = %d passed,Channel not in 5GHz band",
+                    __func__, targetChannel);
+
+        return VOS_STATUS_E_FAULT;
+    }
+
+    /*
      * Now, validate if the passed channel is valid in the
      * current regulatory domain.
      */
-    if ( sapContext->channel != targetChannel &&
-         ((vos_nv_getChannelEnabledState(targetChannel) == NV_CHANNEL_ENABLE)
+    if ( (vos_nv_getChannelEnabledState(targetChannel) == NV_CHANNEL_ENABLE)
                                     ||
-         (vos_nv_getChannelEnabledState(targetChannel) == NV_CHANNEL_DFS &&
-          !vos_concurrent_open_sessions_running())) )
+         (vos_nv_getChannelEnabledState(targetChannel) == NV_CHANNEL_DFS) )
     {
-#ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
-         /*
-          * validate target channel switch w.r.t various concurrency rules set.
-          */
-         valid = sme_validate_sap_channel_switch(VOS_GET_HAL_CB(sapContext->pvosGCtx),
-                  targetChannel, sapContext->csrRoamProfile.phyMode,
-                  sapContext->cc_switch_mode, sapContext->sessionId);
-         if (!valid)
-         {
-             VOS_TRACE(VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_ERROR,
-                       FL("Channel switch to %u is not allowed due to concurrent channel interference"),
-                          targetChannel);
-             return VOS_STATUS_E_FAULT;
-         }
-#endif
         /*
          * Post a CSA IE request to SAP state machine with
          * target channel information and also CSA IE required
@@ -1595,19 +1601,6 @@ WLANSAP_SetChannelChangeWithCsa(v_PVOID_t pvosGCtx, v_U32_t targetChannel)
          */
          if (eSAP_STARTED == sapContext->sapsMachine)
          {
-             /*
-              * currently OBSS scan is done in hostapd, so to avoid
-              * SAP coming up in HT40 on channel switch we are
-              * disabling channel bonding in 2.4ghz.
-              */
-             if (targetChannel <= RF_CHAN_14)
-             {
-                 sme_GetConfigParam(pMac, &sme_config);
-                 sme_config.csrConfig.channelBondingMode24GHz =
-                                         eCSR_INI_SINGLE_CHANNEL_CENTERED;
-                 sme_UpdateConfig(pMac, &sme_config);
-             }
-
              /*
               * Copy the requested target channel
               * to sap context.
@@ -1628,8 +1621,6 @@ WLANSAP_SetChannelChangeWithCsa(v_PVOID_t pvosGCtx, v_U32_t targetChannel)
               * request was issued.
               */
              pMac->sap.SapDfsInfo.sap_radar_found_status = VOS_TRUE;
-             pMac->sap.SapDfsInfo.cac_state = eSAP_DFS_DO_NOT_SKIP_CAC;
-             sap_CacResetNotify(hHal);
 
              /*
               * Post the eSAP_DFS_CHNL_SWITCH_ANNOUNCEMENT_START
@@ -2840,7 +2831,7 @@ VOS_STATUS WLANSAP_DeRegisterMgmtFrame
   SIDE EFFECTS
 ============================================================================*/
 VOS_STATUS
-WLANSAP_ChannelChangeRequest(v_PVOID_t pSapCtx, uint8_t target_channel)
+WLANSAP_ChannelChangeRequest(v_PVOID_t pSapCtx, tANI_U8 tArgetChannel)
 {
     ptSapContext sapContext = NULL;
     eHalStatus halStatus = eHAL_STATUS_FAILURE;
@@ -2861,14 +2852,10 @@ WLANSAP_ChannelChangeRequest(v_PVOID_t pSapCtx, uint8_t target_channel)
                    "%s: Invalid HAL pointer from pvosGCtx", __func__);
         return VOS_STATUS_E_FAULT;
     }
-    sapContext->csrRoamProfile.ChannelInfo.ChannelList[0] = target_channel;
-    /* Update the channel as this will be used to
-     * send event to supplicant
-     */
-    sapContext->channel = target_channel;
 
     halStatus = sme_RoamChannelChangeReq( hHal, sapContext->bssid,
-                                        &sapContext->csrRoamProfile);
+       tArgetChannel,
+       sapConvertSapPhyModeToCsrPhyMode(sapContext->csrRoamProfile.phyMode) );
 
     if (halStatus == eHAL_STATUS_SUCCESS)
     {
@@ -2976,9 +2963,6 @@ WLANSAP_DfsSendCSAIeRequest(v_PVOID_t pSapCtx)
     eHalStatus halStatus = eHAL_STATUS_FAILURE;
     v_PVOID_t hHal = NULL;
     tpAniSirGlobal pMac = NULL;
-    u_int32_t cbmode, vht_ch_width;
-    u_int8_t ch_bandwidth;
-
     sapContext = (ptSapContext)pSapCtx;
 
     if ( NULL == sapContext )
@@ -2995,43 +2979,12 @@ WLANSAP_DfsSendCSAIeRequest(v_PVOID_t pSapCtx)
                    "%s: Invalid HAL pointer from pvosGCtx", __func__);
         return VOS_STATUS_E_FAULT;
     }
-
     pMac = PMAC_STRUCT( hHal );
-
-    vht_ch_width = pMac->sap.SapDfsInfo.new_chanWidth;
-    sme_SelectCBMode(hHal,
-                     sapContext->csrRoamProfile.phyMode,
-                     pMac->sap.SapDfsInfo.target_channel);
-
-    cbmode = (pMac->sap.SapDfsInfo.target_channel <= 14) ?
-                 pMac->roam.configParam.channelBondingMode24GHz :
-                 pMac->roam.configParam.channelBondingMode5GHz;
-    if (pMac->sap.SapDfsInfo.target_channel <= 14 ||
-        vht_ch_width == eHT_CHANNEL_WIDTH_40MHZ ||
-        vht_ch_width == eHT_CHANNEL_WIDTH_20MHZ)
-    {
-        switch (cbmode)
-        {
-          case eCSR_INI_DOUBLE_CHANNEL_HIGH_PRIMARY:
-              ch_bandwidth = BW40_HIGH_PRIMARY;
-              break;
-          case eCSR_INI_DOUBLE_CHANNEL_LOW_PRIMARY:
-              ch_bandwidth = BW40_LOW_PRIMARY;
-              break;
-          case eCSR_INI_SINGLE_CHANNEL_CENTERED:
-          default:
-              ch_bandwidth = BW20;
-              break;
-        }
-    }
-    else
-        ch_bandwidth = BW80;
 
     halStatus = sme_RoamCsaIeRequest(hHal,
                                      sapContext->bssid,
                                      pMac->sap.SapDfsInfo.target_channel,
-                                     pMac->sap.SapDfsInfo.csaIERequired,
-                                     ch_bandwidth);
+                                     pMac->sap.SapDfsInfo.csaIERequired);
 
     if (halStatus == eHAL_STATUS_SUCCESS)
     {
@@ -3394,6 +3347,8 @@ WLANSAP_UpdateSapConfigAddIE(tsap_Config_t *pConfig,
     default:
             VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_INFO,
                 FL("No matching buffer type %d"), updateType);
+            if (pBuffer != NULL)
+                vos_mem_free(pBuffer);
         break;
     }
 
@@ -3758,4 +3713,50 @@ WLANSAP_Set_DfsNol(v_PVOID_t pSapCtx, eSapDfsNolType conf)
         (v_PVOID_t) eSAP_STATUS_SUCCESS);
 
     return VOS_STATUS_SUCCESS;
+}
+
+/*==========================================================================
+  FUNCTION    WLANSAP_PopulateDelStaParams
+
+  DESCRIPTION
+  This API is used to populate del station parameters
+  DEPENDENCIES
+  NA.
+
+  PARAMETERS
+  IN
+  mac:           pointer to peer mac address.
+  reason_code:   Reason code for the disassoc/deauth.
+  subtype:       subtype points to either disassoc/deauth frame.
+  pDelStaParams: address where parameters to be populated.
+
+  RETURN VALUE NONE
+
+  SIDE EFFECTS
+============================================================================*/
+void WLANSAP_PopulateDelStaParams(const v_U8_t *mac,
+                                  v_U16_t reason_code,
+                                  v_U8_t subtype,
+                                  struct tagCsrDelStaParams *pDelStaParams)
+{
+        if (NULL == mac)
+            memset(pDelStaParams->peerMacAddr, 0xff, VOS_MAC_ADDR_SIZE);
+        else
+            vos_mem_copy(pDelStaParams->peerMacAddr, mac, VOS_MAC_ADDR_SIZE);
+
+        if (reason_code == 0)
+            pDelStaParams->reason_code = eSIR_MAC_DEAUTH_LEAVING_BSS_REASON;
+        else
+            pDelStaParams->reason_code = reason_code;
+
+        if (subtype == (SIR_MAC_MGMT_DEAUTH >> 4) ||
+            subtype == (SIR_MAC_MGMT_DISASSOC >> 4))
+            pDelStaParams->subtype = subtype;
+        else
+            pDelStaParams->subtype = (SIR_MAC_MGMT_DEAUTH >> 4);
+
+        VOS_TRACE(VOS_MODULE_ID_SAP, VOS_TRACE_LEVEL_INFO,
+               FL("Delete STA with RC:%hu subtype:%hhu MAC::" MAC_ADDRESS_STR),
+                   pDelStaParams->reason_code, pDelStaParams->subtype,
+                   MAC_ADDR_ARRAY(pDelStaParams->peerMacAddr));
 }

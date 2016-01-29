@@ -95,8 +95,7 @@ typedef struct sSirProbeRespBeacon
     tDot11fIEPowerConstraints localPowerConstraint;
     tDot11fIETPCReport        tpcReport;
     tDot11fIEChanSwitchAnn    channelSwitchIE;
-    tDot11fIEsec_chan_offset_ele sec_chan_offset;
-    tDot11fIEext_chan_switch_ann ext_chan_switch;
+    tDot11fIEExtChanSwitchAnn extChannelSwitchIE;
     tSirMacAddr               bssid;
     tDot11fIEQuiet            quietIE;
     tDot11fIEHTCaps           HTCaps;
@@ -127,8 +126,7 @@ typedef struct sSirProbeRespBeacon
     tANI_U8                   rsnPresent;
     tANI_U8                   erpPresent;
     tANI_U8                   channelSwitchPresent;
-    uint8_t                   sec_chan_offset_present;
-    uint8_t                   ext_chan_switch_present;
+    tANI_U8                   extChannelSwitchPresent;
     tANI_U8                   quietIEPresent;
     tANI_U8                   tpcReportPresent;
     tANI_U8                   powerConstraintPresent;
@@ -376,8 +374,8 @@ struct s_ext_cap {
 	uint8_t    NwChanControl: 1;
 	uint8_t    WhiteSpaceMap: 1;
 	uint8_t   ChanAvailQuery: 1;
-	uint8_t   fineTimingMeas: 1;
-	uint8_t        reserved7: 1;
+	uint8_t    fine_time_meas_responder: 1;
+	uint8_t    fine_time_meas_initiator: 1;
 };
 
 tANI_U8
@@ -584,22 +582,11 @@ PopulateDot11fChanSwitchAnn(tpAniSirGlobal          pMac,
                             tDot11fIEChanSwitchAnn *pDot11f,
                             tpPESession psessionEntry);
 
-/**
- * populate_dot_11_f_ext_chann_switch_ann() - Function to populate ECS
- * @mac_ptr:            Pointer to PMAC structure
- * @dot_11_ptr:         ECS element
- * @session_entry:      PE session entry
- *
- * This function is used to populate the extended channel switch element
- *
- * Return: None
- *
- */
+/// Populate a tDot11fIEChanSwitchAnn
 void
-populate_dot_11_f_ext_chann_switch_ann(tpAniSirGlobal mac_ptr,
-                  tDot11fIEext_chan_switch_ann *dot_11_ptr,
-                                     tpPESession session_entry);
-
+PopulateDot11fExtChanSwitchAnn(tpAniSirGlobal          pMac,
+                             tDot11fIEExtChanSwitchAnn *pDot11f,
+                             tpPESession psessionEntry);
 
 /// Populate a tDot11fIEChannelSwitchWrapper
 void

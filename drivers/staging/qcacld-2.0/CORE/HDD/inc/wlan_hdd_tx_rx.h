@@ -75,6 +75,8 @@
 #define SME_QOS_UAPSD_CFG_VI_CHANGED_MASK     0xF4
 #define SME_QOS_UAPSD_CFG_VO_CHANGED_MASK     0xF8
 
+#define HDD_ETH_HEADER_LEN      14
+
 /*---------------------------------------------------------------------------
   Type declarations
   -------------------------------------------------------------------------*/
@@ -212,23 +214,6 @@ extern VOS_STATUS hdd_tx_low_resource_cbk( vos_pkt_t *pVosPacket,
 extern VOS_STATUS hdd_rx_packet_cbk(v_VOID_t *vosContext, adf_nbuf_t rxBufChain,
                                     v_U8_t staId);
 
-#ifdef IPA_OFFLOAD
-/**============================================================================
-  @brief hdd_rx_mul_packet_cbk() - Receive callback registered with TL.
-  IPA integrated platform, TL Shim will give multiple RX frames with NETBUF
-  link. Linked frames should be un-link and send to NETDEV.
-
-  @param vosContext      : [in] pointer to VOS context
-  @param rx_buf_list     : [in] pointer to rx adf_nbuf linked list
-  @param staId           : [in] Station Id (Adress 1 Index)
-
-  @return                : VOS_STATUS_E_FAILURE if any errors encountered,
-                         : VOS_STATUS_SUCCESS otherwise
-  ===========================================================================*/
-VOS_STATUS hdd_rx_mul_packet_cbk(v_VOID_t *vosContext,
-                                    adf_nbuf_t rx_buf_list, v_U8_t staId);
-#endif /* IPA_OFFLOAD */
-
 /**============================================================================
   @brief hdd_IsEAPOLPacket() - Checks the packet is EAPOL or not.
 
@@ -316,4 +301,27 @@ void hdd_tx_resume_cb(void *adapter_context,
   ===========================================================================*/
 void hdd_tx_resume_timer_expired_handler(void *adapter_context);
 #endif /* QCA_LL_TX_FLOW_CT */
+
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+/**
+ * wlan_hdd_log_eapol() - Function to check and extract EAPOL params
+ * @skb:               skb data
+ * @event_type:        One of enum wifi_connectivity_events to indicate Tx/Rx
+ *
+ * This function parses the input skb data to get the EAPOL params,if the
+ * packet is EAPOL and store it in the pointer passed as input
+ *
+ * Return: None
+ *
+ */
+void wlan_hdd_log_eapol(struct sk_buff *skb,
+			uint8_t event_type);
+#else
+static inline void wlan_hdd_log_eapol(struct sk_buff *skb,
+				      uint8_t event_type)
+{
+
+}
+#endif /* FEATURE_WLAN_DIAG_SUPPORT */
+
 #endif    // end #if !defined( WLAN_HDD_TX_RX_H )

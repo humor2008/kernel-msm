@@ -123,8 +123,8 @@ tSirRetStatus schAppendAddnIE(tpAniSirGlobal pMac, tpPESession psessionEntry,
                     noaLen = limGetNoaAttrStream(pMac, noaStream, psessionEntry);
                     if(noaLen)
                     {
-                        if(noaLen + len <= WNI_CFG_PROBE_RSP_BCN_ADDNIE_DATA_LEN)
-                        {
+                        if ((noaLen + len) <=
+                                        WNI_CFG_PROBE_RSP_BCN_ADDNIE_DATA_LEN) {
                             vos_mem_copy(&addIE[len], noaStream, noaLen);
                             len += noaLen;
                             /* Update IE Len */
@@ -311,12 +311,6 @@ tSirRetStatus schSetFixedBeaconFields(tpAniSirGlobal pMac,tpPESession psessionEn
      * Initialize the 'new' fields at the end of the beacon
      */
 
-    if ((psessionEntry->limSystemRole == eLIM_AP_ROLE) &&
-       psessionEntry->dfsIncludeChanSwIe == VOS_TRUE) {
-           populate_dot_11_f_ext_chann_switch_ann(pMac,
-                           &pBcn2->ext_chan_switch_ann,
-                           psessionEntry);
-    }
 
     PopulateDot11fCountry( pMac, &pBcn2->Country, psessionEntry);
     if(pBcn1->Capabilities.qos)
@@ -602,16 +596,6 @@ void limUpdateProbeRspTemplateIeBitmapBeacon2(tpAniSirGlobal pMac,
                      sizeof(beacon2->ChanSwitchAnn));
 
     }
-
-    /* EXT Channel Switch Announcement CHNL_EXTENDED_SWITCH_ANN_EID*/
-    if (beacon2->ext_chan_switch_ann.present)
-    {
-        SetProbeRspIeBitmap(DefProbeRspIeBitmap,
-               SIR_MAC_CHNL_EXTENDED_SWITCH_ANN_EID);
-        vos_mem_copy((void *)&prb_rsp->ext_chan_switch_ann,
-            (void *)&beacon2->ext_chan_switch_ann,
-             sizeof(beacon2->ext_chan_switch_ann));
-    }
     /* ERP information */
     if(beacon2->ERPInfo.present)
     {
@@ -705,6 +689,13 @@ void limUpdateProbeRspTemplateIeBitmapBeacon2(tpAniSirGlobal pMac,
         SetProbeRspIeBitmap(DefProbeRspIeBitmap,SIR_MAC_WPA_EID);
         vos_mem_copy((void *)&prb_rsp->WMMCaps, (void *)&beacon2->WMMCaps,
                      sizeof(beacon2->WMMCaps));
+    }
+
+    /* Extended Capability */
+    if (beacon2->ExtCap.present) {
+        SetProbeRspIeBitmap(DefProbeRspIeBitmap, DOT11F_EID_EXTCAP);
+        vos_mem_copy((void *)&prb_rsp->ExtCap, (void *)&beacon2->ExtCap,
+                     sizeof(beacon2->ExtCap));
     }
 
 }

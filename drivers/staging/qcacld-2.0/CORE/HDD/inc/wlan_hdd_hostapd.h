@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -59,7 +59,7 @@ hdd_adapter_t* hdd_wlan_create_ap_dev( hdd_context_t *pHddCtx, tSirMacAddr macAd
 
 VOS_STATUS hdd_register_hostapd(hdd_adapter_t *pAdapter, tANI_U8 rtnl_held);
 
-VOS_STATUS hdd_unregister_hostapd(hdd_adapter_t *pAdapter);
+VOS_STATUS hdd_unregister_hostapd(hdd_adapter_t *pAdapter, bool rtnl_held);
 
 eCsrAuthType
 hdd_TranslateRSNToCsrAuthType( u_int8_t auth_suite[4]);
@@ -76,8 +76,8 @@ hdd_TranslateWPAToCsrAuthType(u_int8_t auth_suite[4]);
 eCsrEncryptionType
 hdd_TranslateWPAToCsrEncryptionType(u_int8_t cipher_suite[4]);
 
-VOS_STATUS hdd_softap_sta_deauth(hdd_adapter_t*,v_U8_t*);
-void hdd_softap_sta_disassoc(hdd_adapter_t*,v_U8_t*);
+VOS_STATUS hdd_softap_sta_deauth(hdd_adapter_t*, struct tagCsrDelStaParams*);
+void hdd_softap_sta_disassoc(hdd_adapter_t*, struct tagCsrDelStaParams*);
 void hdd_softap_tkip_mic_fail_counter_measure(hdd_adapter_t*,v_BOOL_t);
 int hdd_softap_unpackIE( tHalHandle halHandle,
                 eCsrEncryptionType *pEncryptType,
@@ -101,7 +101,4 @@ void hdd_restart_softap (hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter);
 VOS_STATUS hdd_set_sap_ht2040_mode(hdd_adapter_t *pHostapdAdapter,
                                    tANI_U8 channel_type);
 #endif
-
-int hdd_softap_set_channel_change(struct net_device *dev, int target_channel);
-
 #endif    // end #if !defined( WLAN_HDD_HOSTAPD_H )

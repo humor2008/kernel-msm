@@ -414,6 +414,12 @@ typedef struct tagCsrScanResultFilter
     tANI_U8 MFPRequired;
     tANI_U8 MFPCapable;
 #endif
+    /* The following flag is used to distinguish the
+     * roaming case while building the scan filter and
+     * applying it on to the scan results. This is mainly
+     * used to support whitelist ssid feature.
+     */
+    uint8_t scan_filter_for_roam;
 }tCsrScanResultFilter;
 
 
@@ -526,9 +532,8 @@ typedef enum
     // Channel sw update notification
     eCSR_ROAM_DFS_CHAN_SW_NOTIFY,
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
-    eCSR_ROAM_AUTHORIZED_EVENT,
+    eCSR_ROAM_AUTHORIZED_EVENT
 #endif
-    eCSR_ROAM_EXT_CHG_CHNL_IND,
 }eRoamCmdStatus;
 
 
@@ -626,7 +631,6 @@ typedef enum
     eCSR_ROAM_RESULT_CHANNEL_CHANGE_FAILURE,
     eCSR_ROAM_RESULT_DFS_CHANSW_UPDATE_SUCCESS,
     eCSR_ROAM_RESULT_DFS_CHANSW_UPDATE_FAILURE,
-    eCSR_ROAM_EXT_CHG_CHNL_UPDATE_IND,
 }eCsrRoamResult;
 
 
@@ -834,6 +838,23 @@ typedef enum
    eCSR_UMA_GAN,
    eCSR_HDD
 } eCsrStatsRequesterType;
+
+/**
+ * enum csr_hi_rssi_scan_id - Parameter ids for hi rssi scan feature
+ *
+ * eCSR_HI_RSSI_SCAN_MAXCOUNT_ID: how many times scan can be performed
+ * eCSR_HI_RSSI_SCAN_RSSI_DELTA_ID: rssi difference to trigger scan
+ * eCSR_HI_RSSI_SCAN_DELAY_ID: delay in millseconds between scans
+ * eCSR_HI_RSSI_SCAN_RSSI_UB_ID: rssi upper bound for scan trigger
+ */
+#ifdef WLAN_FEATURE_NEIGHBOR_ROAMING
+enum csr_hi_rssi_scan_id {
+	eCSR_HI_RSSI_SCAN_MAXCOUNT_ID,
+	eCSR_HI_RSSI_SCAN_RSSI_DELTA_ID,
+	eCSR_HI_RSSI_SCAN_DELAY_ID,
+	eCSR_HI_RSSI_SCAN_RSSI_UB_ID
+};
+#endif
 
 typedef struct tagPmkidCandidateInfo
 {
@@ -1059,6 +1080,10 @@ typedef struct tagCsrNeighborRoamConfigParams
     tANI_U8        nRoamBmissFinalBcnt;
     tANI_U8        nRoamBeaconRssiWeight;
     tANI_U8        delay_before_vdev_stop;
+    uint32_t       nhi_rssi_scan_max_count;
+    uint32_t       nhi_rssi_scan_rssi_delta;
+    uint32_t       nhi_rssi_scan_delay;
+    int32_t        nhi_rssi_scan_rssi_ub;
 }tCsrNeighborRoamConfigParams;
 #endif
 
@@ -1223,7 +1248,7 @@ typedef struct tagCsrConfigParam
 #endif
 #endif
 
-
+    tANI_BOOLEAN ignorePeerErpInfo;
     tANI_U8 scanCfgAgingTime;
 
     tANI_U8   enableTxLdpc;
@@ -1244,6 +1269,8 @@ typedef struct tagCsrConfigParam
 
     tANI_BOOLEAN obssEnabled;
 
+    v_U16_t    pkt_err_disconn_th;
+    tANI_BOOLEAN sendDeauthBeforeCon;
 }tCsrConfigParam;
 
 //Tush
@@ -1321,6 +1348,10 @@ typedef struct tagCsrRoamInfo
     tSirEseBcnReportRsp *pEseBcnReportRsp;
 #endif /* FEATURE_WLAN_ESE_UPLOAD */
 #endif
+
+#ifdef WLAN_FEATURE_VOWIFI_11R
+    tANI_BOOLEAN is11rAssoc;
+#endif
     void* pRemainCtx;
     tANI_U32 rxChan;
 
@@ -1349,7 +1380,6 @@ typedef struct tagCsrRoamInfo
     tANI_U8 replay_ctr[SIR_REPLAY_CTR_LEN];
 #endif
     tSirSmeChanInfo chan_info;
-    uint8_t target_channel;
 }tCsrRoamInfo;
 
 
@@ -1564,6 +1594,13 @@ typedef struct tagCsrEseBeaconReq
     tCsrEseBeaconReqParams bcnReq[SIR_ESE_MAX_MEAS_IE_REQS];
 } tCsrEseBeaconReq, *tpCsrEseBeaconReq;
 #endif /* FEATURE_WLAN_ESE && FEATURE_WLAN_ESE_UPLOAD */
+
+struct tagCsrDelStaParams
+{
+    tCsrBssid peerMacAddr;
+    u16 reason_code;
+    u8 subtype;
+};
 
 ////////////////////////////////////////////Common SCAN starts
 

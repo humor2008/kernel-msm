@@ -64,6 +64,7 @@
 #include "wlan_qct_wda.h"
 
 #include "pmmApi.h"
+#include "wma.h"
 
 #define BA_DEFAULT_TX_BUFFER_SIZE 64
 
@@ -338,38 +339,29 @@ __limProcessChannelSwitchActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
         psessionEntry->gLimChannelSwitch.state = eLIM_CHANNEL_SWITCH_PRIMARY_ONLY;
         psessionEntry->gLimChannelSwitch.secondarySubBand = PHY_SINGLE_CHANNEL_CENTERED;
 
-        if (psessionEntry->htSupportedChannelWidthSet) {
-            if ((pChannelSwitchFrame->sec_chan_offset_ele.
-                 secondaryChannelOffset == PHY_DOUBLE_CHANNEL_LOW_PRIMARY) ||
-                (pChannelSwitchFrame->sec_chan_offset_ele.
-                 secondaryChannelOffset == PHY_DOUBLE_CHANNEL_HIGH_PRIMARY)) {
-                psessionEntry->gLimChannelSwitch.state =
-                        eLIM_CHANNEL_SWITCH_PRIMARY_AND_SECONDARY;
-                psessionEntry->gLimChannelSwitch.secondarySubBand =
-                pChannelSwitchFrame->sec_chan_offset_ele.secondaryChannelOffset;
+        if (psessionEntry->htSupportedChannelWidthSet)
+        {
+            if ((pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset == PHY_DOUBLE_CHANNEL_LOW_PRIMARY) ||
+                (pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset == PHY_DOUBLE_CHANNEL_HIGH_PRIMARY))
+            {
+                psessionEntry->gLimChannelSwitch.state = eLIM_CHANNEL_SWITCH_PRIMARY_AND_SECONDARY;
+                psessionEntry->gLimChannelSwitch.secondarySubBand = pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset;
             }
 #ifdef WLAN_FEATURE_11AC
-            if(psessionEntry->vhtCapability &&
-                pChannelSwitchFrame->WiderBWChanSwitchAnn.present) {
-                if (pChannelSwitchFrame->WiderBWChanSwitchAnn.newChanWidth ==
-                    WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ) {
-                    if (pChannelSwitchFrame->sec_chan_offset_ele.present &&
-                        ((pChannelSwitchFrame->sec_chan_offset_ele.
-                        secondaryChannelOffset ==
-                        PHY_DOUBLE_CHANNEL_LOW_PRIMARY) ||
-                        (pChannelSwitchFrame->sec_chan_offset_ele.
-                        secondaryChannelOffset ==
-                        PHY_DOUBLE_CHANNEL_HIGH_PRIMARY))) {
-                        psessionEntry->gLimChannelSwitch.state =
-                            eLIM_CHANNEL_SWITCH_PRIMARY_AND_SECONDARY;
+            if(psessionEntry->vhtCapability && pChannelSwitchFrame->WiderBWChanSwitchAnn.present)
+            {
+                if (pChannelSwitchFrame->WiderBWChanSwitchAnn.newChanWidth == WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ)
+                {
+                    if (pChannelSwitchFrame->ExtChanSwitchAnn.present && ((pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset == PHY_DOUBLE_CHANNEL_LOW_PRIMARY) ||
+                        (pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset == PHY_DOUBLE_CHANNEL_HIGH_PRIMARY)))
+                    {
+                        psessionEntry->gLimChannelSwitch.state = eLIM_CHANNEL_SWITCH_PRIMARY_AND_SECONDARY;
                         psessionEntry->gLimChannelSwitch.secondarySubBand =
                            limGet11ACPhyCBState(pMac,
-                                psessionEntry->gLimChannelSwitch.primaryChannel,
-                                pChannelSwitchFrame->sec_chan_offset_ele.
-                                secondaryChannelOffset,
-                                pChannelSwitchFrame->WiderBWChanSwitchAnn.
-                                newCenterChanFreq0,
-                                psessionEntry);
+                                                psessionEntry->gLimChannelSwitch.primaryChannel,
+                                                pChannelSwitchFrame->ExtChanSwitchAnn.secondaryChannelOffset,
+                                                pChannelSwitchFrame->WiderBWChanSwitchAnn.newCenterChanFreq0,
+                                                psessionEntry);
                     }
                 }
             }
@@ -391,110 +383,6 @@ __limProcessChannelSwitchActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
     return;
 } /*** end limProcessChannelSwitchActionFrame() ***/
 
-/**
- * lim_process_ext_channel_switch_action_frame()- Process ECSA Action
- * Frames.
- * @mac_ctx: pointer to global mac structure
- * @rx_packet_info: rx packet meta information
- * @session_entry: Session entry.
- *
- * This function is called when ECSA action frame is received.
- *
- * Return: void
- */
-static void
-lim_process_ext_channel_switch_action_frame(tpAniSirGlobal mac_ctx,
-		uint8_t *rx_packet_info, tpPESession session_entry)
-{
-
-	tpSirMacMgmtHdr         hdr;
-	uint8_t                 *body;
-	tDot11fext_channel_switch_action_frame *ext_channel_switch_frame;
-	uint32_t                frame_len;
-	uint32_t                status;
-	uint8_t                 target_channel;
-
-	hdr = WDA_GET_RX_MAC_HEADER(rx_packet_info);
-	body = WDA_GET_RX_MPDU_DATA(rx_packet_info);
-	frame_len = WDA_GET_RX_PAYLOAD_LEN(rx_packet_info);
-
-	limLog(mac_ctx, LOG1, FL("Received EXT Channel switch action frame"));
-
-	ext_channel_switch_frame =
-		 vos_mem_malloc(sizeof(*ext_channel_switch_frame));
-	if (NULL == ext_channel_switch_frame) {
-		limLog(mac_ctx, LOGE, FL("AllocateMemory failed"));
-		return;
-	}
-
-	/* Unpack channel switch frame */
-	status = dot11fUnpackext_channel_switch_action_frame(mac_ctx,
-			body, frame_len, ext_channel_switch_frame);
-
-	if (DOT11F_FAILED(status)) {
-
-		limLog( mac_ctx, LOGE,
-			FL( "Failed to parse CHANSW action frame (0x%08x, len %d):"),
-			status, frame_len);
-		vos_mem_free(ext_channel_switch_frame);
-		return;
-	} else if (DOT11F_WARNED(status)) {
-
-		limLog( mac_ctx, LOGW,
-		  FL( "There were warnings while unpacking CHANSW Request (0x%08x, %d bytes):"),
-		  status, frame_len);
-	}
-
-	target_channel =
-	 ext_channel_switch_frame->ext_chan_switch_ann_action.new_channel;
-
-	/* Free ext_channel_switch_frame here as its no longer needed */
-	vos_mem_free(ext_channel_switch_frame);
-	/*
-	 * Now, validate if channel change is required for the passed
-	 * channel and if is valid in the current regulatory domain,
-	 * and no concurrent session is running.
-	 */
-	if (!((session_entry->currentOperChannel != target_channel) &&
-	 ((vos_nv_getChannelEnabledState(target_channel)
-							== NV_CHANNEL_ENABLE) ||
-	 (vos_nv_getChannelEnabledState(target_channel) == NV_CHANNEL_DFS &&
-	 !vos_concurrent_open_sessions_running())))) {
-		limLog(mac_ctx, LOGE, FL(" Channel %d is not valid"),
-							target_channel);
-		return;
-	}
-
-	if (eLIM_AP_ROLE == session_entry->limSystemRole) {
-
-		struct sir_sme_ext_cng_chan_ind *ext_cng_chan_ind;
-		tSirMsgQ mmh_msg;
-
-		ext_cng_chan_ind = vos_mem_malloc(sizeof(*ext_cng_chan_ind));
-		if (NULL == ext_cng_chan_ind) {
-			limLog(mac_ctx, LOGP,
-			  FL("AllocateMemory failed for ext_cng_chan_ind"));
-			return;
-		}
-
-		vos_mem_zero(ext_cng_chan_ind,
-			sizeof(*ext_cng_chan_ind));
-		ext_cng_chan_ind->session_id=
-					session_entry->smeSessionId;
-
-		/* No need to extract op mode as BW will be decided in
-		 *  in SAP FSM depending on previous BW.
-		 */
-		ext_cng_chan_ind->new_channel = target_channel;
-
-		mmh_msg.type = eWNI_SME_EXT_CHANGE_CHANNEL_IND;
-		mmh_msg.bodyptr = ext_cng_chan_ind;
-		mmh_msg.bodyval = 0;
-		limSysProcessMmhMsgApi(mac_ctx, &mmh_msg, ePROT);
-	}
-	return;
-} /*** end lim_process_ext_channel_switch_action_frame() ***/
-
 
 #ifdef WLAN_FEATURE_11AC
 static void
@@ -509,6 +397,8 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
     tpDphHashNode           pSta;
     tANI_U16                aid;
     tANI_U8  operMode;
+    tANI_U8  ch_bw = 0;
+    tANI_U8  skip_opmode_update = false;
 
     pHdr = WDA_GET_RX_MAC_HEADER(pRxPacketInfo);
     pBody = WDA_GET_RX_MPDU_DATA(pRxPacketInfo);
@@ -545,8 +435,16 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
     pSta = dphLookupHashEntry(pMac, pHdr->sa, &aid, &psessionEntry->dph.dphHashTable);
 
     operMode = pSta->vhtSupportedChannelWidthSet ? eHT_CHANNEL_WIDTH_80MHZ : pSta->htSupportedChannelWidthSet ? eHT_CHANNEL_WIDTH_40MHZ: eHT_CHANNEL_WIDTH_20MHZ;
-    if( operMode != pOperatingModeframe->OperatingMode.chanWidth)
+
+    if ((operMode == eHT_CHANNEL_WIDTH_80MHZ) &&
+        (pOperatingModeframe->OperatingMode.chanWidth >
+             eHT_CHANNEL_WIDTH_80MHZ))
+        skip_opmode_update = true;
+
+    if (!skip_opmode_update &&
+        (operMode != pOperatingModeframe->OperatingMode.chanWidth))
     {
+        uint32_t fw_vht_ch_wd = wma_get_vht_ch_width();
         limLog(pMac, LOGE,
             FL(" received Chanwidth %d, staIdx = %d"),
             (pOperatingModeframe->OperatingMode.chanWidth ),
@@ -561,23 +459,33 @@ __limProcessOperatingModeActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo
             pHdr->sa[4],
             pHdr->sa[5]);
 
-        if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_80MHZ)
-        {
+        if ((pOperatingModeframe->OperatingMode.chanWidth >
+                eHT_CHANNEL_WIDTH_80MHZ) &&
+             (fw_vht_ch_wd > eHT_CHANNEL_WIDTH_80MHZ)) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ;
+            pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_160MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth >=
+                eHT_CHANNEL_WIDTH_80MHZ) {
             pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
-        }
-        else if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_40MHZ)
-        {
-            pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_80MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth ==
+                eHT_CHANNEL_WIDTH_40MHZ) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_40MHZ;
-        }
-        else if(pOperatingModeframe->OperatingMode.chanWidth == eHT_CHANNEL_WIDTH_20MHZ)
-        {
-            pSta->vhtSupportedChannelWidthSet = WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_40MHZ;
+        } else if(pOperatingModeframe->OperatingMode.chanWidth ==
+                eHT_CHANNEL_WIDTH_20MHZ) {
+            pSta->vhtSupportedChannelWidthSet =
+                WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
             pSta->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_20MHZ;
+            ch_bw = eHT_CHANNEL_WIDTH_20MHZ;
         }
-        limCheckVHTOpModeChange( pMac, psessionEntry,
-                                 (pOperatingModeframe->OperatingMode.chanWidth),
+        limCheckVHTOpModeChange(pMac, psessionEntry,
+                                 ch_bw,
                                  pSta->staIndex, pHdr->sa);
     }
 
@@ -1592,9 +1500,13 @@ __limProcessAddBAReq( tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo,tpPESession ps
         goto returnAfterError;
     }
 
-    limLog( pMac, LOGW,
-      FL( "ADDBA Req from STA with AID %d, tid = %d" ),
-      aid, frmAddBAReq.AddBAParameterSet.tid);
+    limLog( pMac, LOG1, FL( "ADDBA Req from STA "MAC_ADDRESS_STR " with AID %d"
+                            " tid = %d policy = %d buffsize = %d"
+                            " amsduSupported = %d"), MAC_ADDR_ARRAY(pHdr->sa),
+                            aid, frmAddBAReq.AddBAParameterSet.tid,
+                            frmAddBAReq.AddBAParameterSet.policy,
+                            frmAddBAReq.AddBAParameterSet.bufferSize,
+                            frmAddBAReq.AddBAParameterSet.amsduSupported);
 
 #ifdef WLAN_SOFTAP_VSTA_FEATURE
     // we can only do BA on "hard" STAs
@@ -1784,9 +1696,15 @@ tANI_U8 *pBody;
     PELOG2(sirDumpBuf( pMac, SIR_DBG_MODULE_ID, LOG2, pBody, frameLen );)
   }
 
-  limLog( pMac, LOGE,
-      FL( "ADDBA Rsp from STA with AID %d, tid = %d, status = %d" ),
-      aid, frmAddBARsp.AddBAParameterSet.tid, frmAddBARsp.Status.status);
+  limLog( pMac, LOG1, FL( "ADDBA Rsp from STA "MAC_ADDRESS_STR " with AID %d "
+                          "tid = %d policy = %d buffsize = %d "
+                          "amsduSupported = %d status = %d"),
+                          MAC_ADDR_ARRAY(pHdr->sa), aid,
+                          frmAddBARsp.AddBAParameterSet.tid,
+                          frmAddBARsp.AddBAParameterSet.policy,
+                          frmAddBARsp.AddBAParameterSet.bufferSize,
+                          frmAddBARsp.AddBAParameterSet.amsduSupported,
+                          frmAddBARsp.Status.status);
 
   //if there is no matchin dialougue token then ignore the response.
 
@@ -2687,10 +2605,6 @@ limProcessActionFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo,tpPESession ps
                break;
 #endif
 
-        case SIR_MAC_ACTION_EXT_CHANNEL_SWITCH_ID:
-           lim_process_ext_channel_switch_action_frame(pMac,
-                                pRxPacketInfo, psessionEntry);
-            break;
         default:
             PELOGE(limLog(pMac, LOGE, FL("Unhandled public action frame -- %x "), pActionHdr->actionID);)
             break;

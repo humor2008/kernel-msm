@@ -50,7 +50,7 @@
 #include "rrmApi.h"
 #endif
 
-#include "regdomain_common.h"
+
 
 ////////////////////////////////////////////////////////////////////////
 void dot11fLog(tpAniSirGlobal pMac, int loglevel, const char *pString,...)
@@ -271,35 +271,6 @@ PopulateDot11fCapabilities2(tpAniSirGlobal         pMac,
 
 } // End PopulateDot11fCapabilities2.
 
-/**
- * populate_dot_11_f_ext_chann_switch_ann() - Function to populate ECS
- * @mac_ptr:		Pointer to PMAC structure
- * @dot_11_ptr:		ECS element
- * @session_entry:	PE session entry
- *
- * This function is used to populate the extended channel switch element
- *
- * Return: None
- *
- */
-void populate_dot_11_f_ext_chann_switch_ann(tpAniSirGlobal mac_ptr,
-		tDot11fIEext_chan_switch_ann *dot_11_ptr,
-		tpPESession session_entry)
-{
-	dot_11_ptr->switch_mode = session_entry->gLimChannelSwitch.switchMode;
-	dot_11_ptr->new_reg_class = regdm_get_opclass_from_channel(
-					mac_ptr->scan.countryCodeCurrent,
-					session_entry->gLimChannelSwitch.
-					primaryChannel,
-					session_entry->gLimChannelSwitch.
-					secondarySubBand);
-	dot_11_ptr->new_channel =
-		session_entry->gLimChannelSwitch.primaryChannel;
-	dot_11_ptr->switch_count =
-		session_entry->gLimChannelSwitch.switchCount;
-	dot_11_ptr->present = 1;
-}
-
 void
 PopulateDot11fChanSwitchAnn(tpAniSirGlobal          pMac,
                             tDot11fIEChanSwitchAnn *pDot11f,
@@ -311,6 +282,18 @@ PopulateDot11fChanSwitchAnn(tpAniSirGlobal          pMac,
 
     pDot11f->present = 1;
 } // End PopulateDot11fChanSwitchAnn.
+
+void
+PopulateDot11fExtChanSwitchAnn(tpAniSirGlobal pMac,
+                               tDot11fIEExtChanSwitchAnn *pDot11f,
+                               tpPESession psessionEntry)
+{
+    //Has to be updated on the cb state basis
+    pDot11f->secondaryChannelOffset =
+             psessionEntry->gLimChannelSwitch.secondarySubBand;
+
+    pDot11f->present = 1;
+}
 
 void
 PopulateDot11fChanSwitchWrapper(tpAniSirGlobal pMac,
@@ -420,8 +403,7 @@ PopulateDot11fDSParams(tpAniSirGlobal     pMac,
                        tDot11fIEDSParams *pDot11f, tANI_U8 channel,
                        tpPESession psessionEntry)
 {
-    if ((IS_24G_CH(channel)) || pMac->rrm.rrmPEContext.rrmEnable)
-    {
+    if (IS_24G_CH(channel)) {
         // .11b/g mode PHY => Include the DS Parameter Set IE:
         pDot11f->curr_channel = channel;
         pDot11f->present = 1;
@@ -537,7 +519,7 @@ PopulateDot11fExtSuppRates(tpAniSirGlobal pMac, tANI_U8 nChannelNum,
 {
     tSirRetStatus nSirStatus;
     tANI_U32           nRates = 0;
-    tANI_U8            rates[WNI_CFG_EXTENDED_OPERATIONAL_RATE_SET_LEN];
+    tANI_U8            rates[SIR_MAC_RATESET_EID_MAX];
 
    /* Use the ext rates present in session entry whenever nChannelNum is set to OPERATIONAL
        else use the ext supported rate set from CFG, which is fixed and does not change dynamically and is used for
@@ -868,20 +850,30 @@ PopulateDot11fVHTCaps(tpAniSirGlobal           pMac,
 
         pDot11f->ldpcCodingCap = (nCfgValue & 0x0001);
 
-        nCfgValue = 0;
-        if (psessionEntry->htConfig.ht_sgi)
-            CFG_GET_INT( nStatus, pMac, WNI_CFG_VHT_SHORT_GI_80MHZ,
-                         nCfgValue );
+        if (psessionEntry->vhtTxChannelWidthSet <
+                        WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ) {
+            pDot11f->shortGI80MHz = 0;
+        } else {
+            nCfgValue = 0;
+            if (psessionEntry->htConfig.ht_sgi)
+                CFG_GET_INT( nStatus, pMac, WNI_CFG_VHT_SHORT_GI_80MHZ,
+                             nCfgValue );
 
-        pDot11f->shortGI80MHz= (nCfgValue & 0x0001);
+            pDot11f->shortGI80MHz= (nCfgValue & 0x0001);
+        }
 
-        nCfgValue = 0;
-        if (psessionEntry->htConfig.ht_sgi)
-            CFG_GET_INT( nStatus, pMac,
-                         WNI_CFG_VHT_SHORT_GI_160_AND_80_PLUS_80MHZ,
-                         nCfgValue );
+        if (psessionEntry->vhtTxChannelWidthSet <
+                        WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ) {
+            pDot11f->shortGI160and80plus80MHz = 0;
+        } else {
+            nCfgValue = 0;
+            if (psessionEntry->htConfig.ht_sgi)
+                CFG_GET_INT( nStatus, pMac,
+                             WNI_CFG_VHT_SHORT_GI_160_AND_80_PLUS_80MHZ,
+                             nCfgValue );
 
-        pDot11f->shortGI160and80plus80MHz = (nCfgValue & 0x0001);
+            pDot11f->shortGI160and80plus80MHz = (nCfgValue & 0x0001);
+        }
 
         nCfgValue = 0;
         if (psessionEntry->htConfig.ht_tx_stbc)
@@ -1123,7 +1115,17 @@ PopulateDot11fExtCap(tpAniSirGlobal   pMac,
 
     if (val)   // If set to true then set RTTv3
     {
-       p_ext_cap->fineTimingMeas = 1;
+        if (LIM_IS_STA_ROLE(psessionEntry)) {
+            p_ext_cap->fine_time_meas_initiator =
+              (pMac->fine_time_meas_cap & FINE_TIME_MEAS_STA_INITIATOR) ? 1 : 0;
+            p_ext_cap->fine_time_meas_responder =
+              (pMac->fine_time_meas_cap & FINE_TIME_MEAS_STA_RESPONDER) ? 1 : 0;
+        } else if (LIM_IS_AP_ROLE(psessionEntry)) {
+            p_ext_cap->fine_time_meas_initiator =
+              (pMac->fine_time_meas_cap & FINE_TIME_MEAS_SAP_INITIATOR) ? 1 : 0;
+            p_ext_cap->fine_time_meas_responder =
+              (pMac->fine_time_meas_cap & FINE_TIME_MEAS_SAP_RESPONDER) ? 1 : 0;
+        }
     }
 
 #ifdef QCA_HT_2040_COEX
@@ -1132,7 +1134,6 @@ PopulateDot11fExtCap(tpAniSirGlobal   pMac,
         p_ext_cap->bssCoexistMgmtSupport = 1;
     }
 #endif
-    p_ext_cap->extChanSwitch = 1;
     return eSIR_SUCCESS;
 }
 
@@ -1845,6 +1846,7 @@ void PopulateDot11fReAssocTspec(tpAniSirGlobal pMac, tDot11fReAssocRequest *pRea
     if (numTspecs) {
         for (idx=0; idx<numTspecs; idx++) {
             PopulateDot11fWMMTSPEC(&pTspec->tspec, &pReassoc->WMMTSPEC[idx]);
+            pTspec->tspec.mediumTime = 0;
             pTspec++;
         }
     }
@@ -2263,19 +2265,14 @@ tSirRetStatus sirConvertProbeFrame2Struct(tpAniSirGlobal       pMac,
     {
         pProbeResp->channelSwitchPresent = 1;
         vos_mem_copy( &pProbeResp->channelSwitchIE, &pr->ChanSwitchAnn,
-                       sizeof(pProbeResp->channelSwitchIE) );
+                       sizeof(tDot11fIEExtChanSwitchAnn) );
     }
 
-    if (pr->ext_chan_switch_ann.present) {
-        pProbeResp->ext_chan_switch_present = 1;
-        vos_mem_copy(&pProbeResp->ext_chan_switch, &pr->ext_chan_switch_ann,
-                       sizeof(tDot11fIEext_chan_switch_ann));
-    }
-
-    if (pr->sec_chan_offset_ele.present) {
-        pProbeResp->sec_chan_offset_present = 1;
-        vos_mem_copy(&pProbeResp->sec_chan_offset, &pr->sec_chan_offset_ele,
-                       sizeof(pProbeResp->sec_chan_offset));
+       if ( pr->ExtChanSwitchAnn.present )
+    {
+        pProbeResp->extChannelSwitchPresent = 1;
+        vos_mem_copy ( &pProbeResp->extChannelSwitchIE, &pr->ExtChanSwitchAnn,
+                       sizeof(tDot11fIEExtChanSwitchAnn) );
     }
 
     if( pr->TPCReport.present)
@@ -2603,8 +2600,9 @@ sirConvertAssocReqFrame2Struct(tpAniSirGlobal pMac,
 
         p_ext_cap = (struct s_ext_cap *)&pAssocReq->ExtCap.bytes;
         limLog(pMac, LOG1,
-               FL("ExtCap is present, timingMeas: %d, fineTimingMeas: %d"),
-               p_ext_cap->timingMeas, p_ext_cap->fineTimingMeas);
+               FL("ExtCap present, timingMeas: %d Initiator: %d Responder: %d"),
+               p_ext_cap->timingMeas, p_ext_cap->fine_time_meas_initiator,
+               p_ext_cap->fine_time_meas_responder);
     }
     vos_mem_free(ar);
     return eSIR_SUCCESS;
@@ -2707,11 +2705,13 @@ sirConvertAssocRespFrame2Struct(tpAniSirGlobal pMac,
 
     if ( ar.HTCaps.present )
     {
+        limLog(pMac, LOG1, FL("Received Assoc Response with HT Cap"));
         vos_mem_copy( &pAssocRsp->HTCaps, &ar.HTCaps, sizeof( tDot11fIEHTCaps ) );
     }
 
     if ( ar.HTInfo.present )
     {
+        limLog(pMac, LOG1, FL("Received Assoc Response with HT Info"));
         vos_mem_copy( &pAssocRsp->HTInfo, &ar.HTInfo, sizeof( tDot11fIEHTInfo ) );
     }
 
@@ -2795,8 +2795,9 @@ sirConvertAssocRespFrame2Struct(tpAniSirGlobal pMac,
                      ar.ExtCap.num_bytes);
         p_ext_cap = (struct s_ext_cap *)&pAssocRsp->ExtCap.bytes;
         limLog(pMac, LOG1,
-               FL("ExtCap is present, timingMeas: %d, fineTimingMeas: %d"),
-               p_ext_cap->timingMeas, p_ext_cap->fineTimingMeas);
+               FL("ExtCap present, timingMeas: %d Initiator: %d Responder: %d"),
+               p_ext_cap->timingMeas, p_ext_cap->fine_time_meas_initiator,
+               p_ext_cap->fine_time_meas_responder);
     }
 
     if ( ar.QosMapSet.present )
@@ -2994,8 +2995,9 @@ sirConvertReassocReqFrame2Struct(tpAniSirGlobal pMac,
         vos_mem_copy(&pAssocReq->ExtCap.bytes, &ar.ExtCap.bytes,
                      ar.ExtCap.num_bytes);
         limLog(pMac, LOG1,
-               FL("ExtCap is present, timingMeas: %d, fineTimingMeas: %d"),
-               p_ext_cap->timingMeas, p_ext_cap->fineTimingMeas);
+               FL("ExtCap present, timingMeas: %d Initiator: %d Responder: %d"),
+               p_ext_cap->timingMeas, p_ext_cap->fine_time_meas_initiator,
+               p_ext_cap->fine_time_meas_responder);
     }
 
     return eSIR_SUCCESS;
@@ -3448,19 +3450,14 @@ sirParseBeaconIE(tpAniSirGlobal        pMac,
     {
         pBeaconStruct->channelSwitchPresent = 1;
         vos_mem_copy( &pBeaconStruct->channelSwitchIE, &pBies->ChanSwitchAnn,
-                      sizeof(pBeaconStruct->channelSwitchIE));
+                      sizeof(tDot11fIEChanSwitchAnn));
     }
 
-    if (pBies->ext_chan_switch_ann.present) {
-        pBeaconStruct->ext_chan_switch_present = 1;
-        vos_mem_copy(&pBeaconStruct->ext_chan_switch, &pBies->ext_chan_switch_ann,
-                      sizeof(tDot11fIEext_chan_switch_ann));
-    }
-
-    if (pBies->sec_chan_offset_ele.present) {
-        pBeaconStruct->sec_chan_offset_present = 1;
-        vos_mem_copy(&pBeaconStruct->sec_chan_offset, &pBies->sec_chan_offset_ele,
-                      sizeof(pBeaconStruct->sec_chan_offset));
+    if ( pBies->ExtChanSwitchAnn.present)
+    {
+        pBeaconStruct->extChannelSwitchPresent= 1;
+        vos_mem_copy( &pBeaconStruct->extChannelSwitchIE, &pBies->ExtChanSwitchAnn,
+                      sizeof(tDot11fIEExtChanSwitchAnn));
     }
 
     if ( pBies->Quiet.present )
@@ -3706,19 +3703,14 @@ sirConvertBeaconFrame2Struct(tpAniSirGlobal       pMac,
     {
         pBeaconStruct->channelSwitchPresent = 1;
         vos_mem_copy( &pBeaconStruct->channelSwitchIE, &pBeacon->ChanSwitchAnn,
-                                     sizeof(pBeaconStruct->channelSwitchIE) );
+                                                       sizeof(tDot11fIEChanSwitchAnn) );
     }
 
-    if (pBeacon->ext_chan_switch_ann.present) {
-        pBeaconStruct->ext_chan_switch_present = 1;
-        vos_mem_copy(&pBeaconStruct->ext_chan_switch, &pBeacon->ext_chan_switch_ann,
-                                        sizeof(tDot11fIEext_chan_switch_ann));
-    }
-
-    if (pBeacon->sec_chan_offset_ele.present) {
-        pBeaconStruct->sec_chan_offset_present = 1;
-        vos_mem_copy(&pBeaconStruct->sec_chan_offset, &pBeacon->sec_chan_offset_ele,
-                                     sizeof(pBeaconStruct->sec_chan_offset));
+    if ( pBeacon->ExtChanSwitchAnn.present )
+    {
+        pBeaconStruct->extChannelSwitchPresent = 1;
+        vos_mem_copy( &pBeaconStruct->extChannelSwitchIE, &pBeacon->ExtChanSwitchAnn,
+                                                       sizeof(tDot11fIEExtChanSwitchAnn) );
     }
 
     if( pBeacon->TPCReport.present)

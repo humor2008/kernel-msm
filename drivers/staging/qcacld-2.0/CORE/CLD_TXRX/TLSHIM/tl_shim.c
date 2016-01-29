@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -495,25 +495,30 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 	}
 #endif
 
+	adf_os_spin_lock_bh(&tl_shim->mgmt_lock);
 	param_tlvs = (WMI_MGMT_RX_EVENTID_param_tlvs *) data;
 	if (!param_tlvs) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Get NULL point message from FW");
 		return 0;
 	}
 
 	hdr = param_tlvs->hdr;
 	if (!hdr) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Rx event is NULL");
 		return 0;
 	}
 
 	if (hdr->buf_len < sizeof(struct ieee80211_frame)) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Invalid rx mgmt packet");
 		return 0;
 	}
 
 	rx_pkt = vos_mem_malloc(sizeof(*rx_pkt));
 	if (!rx_pkt) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Failed to allocate rx packet");
 		return 0;
 	}
@@ -562,6 +567,7 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 			      roundup(hdr->buf_len, 4),
 			      0, 4, FALSE);
 	if (!wbuf) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("%s: Failed to allocate wbuf for mgmt rx len(%u)",
 			__func__, hdr->buf_len);
 		vos_mem_free(rx_pkt);
@@ -575,6 +581,7 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 	rx_pkt->pkt_meta.mpdu_hdr_ptr = adf_nbuf_data(wbuf);
 	rx_pkt->pkt_meta.mpdu_data_ptr = rx_pkt->pkt_meta.mpdu_hdr_ptr +
 					  rx_pkt->pkt_meta.mpdu_hdr_len;
+	rx_pkt->pkt_meta.tsf_delta = hdr->tsf_delta;
 	rx_pkt->pkt_buf = wbuf;
 
 #ifdef BIG_ENDIAN_HOST
@@ -602,12 +609,13 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 #endif
 
 	TLSHIM_LOGD(
-		"%s: BSSID: "MAC_ADDRESS_STR" snr = %d, rssi = %d, rssi_raw = %d",
+		"%s: BSSID: "MAC_ADDRESS_STR" snr: %d, hdr_rssi: %d rssi: %d, rssi_raw: %d",
 			__func__, MAC_ADDR_ARRAY(wh->i_addr3),
-			hdr->snr, rx_pkt->pkt_meta.rssi,
+			hdr->snr, hdr->rssi, rx_pkt->pkt_meta.rssi,
 			rx_pkt->pkt_meta.rssi_raw);
 
 	if (!tl_shim->mgmt_rx) {
+		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 		TLSHIM_LOGE("Not registered for Mgmt rx, dropping the frame");
 		vos_pkt_return_packet(rx_pkt);
 		return 0;
@@ -663,6 +671,7 @@ static int tlshim_mgmt_rx_process(void *context, u_int8_t *data,
 		}
 	    }
 	}
+	adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 
 #ifdef WLAN_FEATURE_11W
 	if (mgt_type == IEEE80211_FC0_TYPE_MGT &&
@@ -767,9 +776,22 @@ static int tlshim_mgmt_rx_wmi_handler(void *context, u_int8_t *data,
 							   vos_ctx);
 	VOS_STATUS ret = VOS_STATUS_SUCCESS;
 
-	adf_os_spin_lock_bh(&tl_shim->mgmt_lock);
+	if (vos_is_logp_in_progress(VOS_MODULE_ID_TL, NULL)) {
+			TLSHIM_LOGE("%s: LOGP in progress\n", __func__);
+			return (-1);
+	}
+
+	if (vos_is_load_unload_in_progress(VOS_MODULE_ID_TL, NULL)) {
+			TLSHIM_LOGE("%s: load/unload in progress\n", __func__);
+			return (-1);
+	}
+
+	if (!tl_shim) {
+		TLSHIM_LOGE("%s: tl shim ctx is NULL\n", __func__);
+		return (-1);
+	}
+
 	ret = tlshim_mgmt_rx_process(context, data, data_len, FALSE, 0);
-	adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
 
 	return ret;
 }
@@ -789,11 +811,9 @@ int tlshim_mgmt_roam_event_ind(void *context, u_int32_t vdev_id)
 		return ret;
 	}
 
-	if (tl_shim->last_beacon_data && tl_shim->last_beacon_len)
-	{
-		adf_os_spin_lock_bh(&tl_shim->mgmt_lock);
-		ret = tlshim_mgmt_rx_process(context, tl_shim->last_beacon_data, tl_shim->last_beacon_len, TRUE, vdev_id);
-		adf_os_spin_unlock_bh(&tl_shim->mgmt_lock);
+	if (tl_shim->last_beacon_data && tl_shim->last_beacon_len) {
+		ret = tlshim_mgmt_rx_process(context, tl_shim->last_beacon_data,
+					tl_shim->last_beacon_len, TRUE, vdev_id);
 	}
 	return ret;
 }
@@ -867,16 +887,10 @@ static void tlshim_data_rx_cb(struct txrx_tl_shim_ctx *tl_shim,
 	} else
 		adf_os_spin_unlock_bh(&tl_shim->bufq_lock);
 
-	buf = buf_list;
-	while (buf) {
-		next_buf = adf_nbuf_queue_next(buf);
-		adf_nbuf_set_next(buf, NULL); /* Add NULL terminator */
-		ret = data_rx(vos_ctx, buf, staid);
-		if (ret != VOS_STATUS_SUCCESS) {
-			TLSHIM_LOGE("Frame Rx to HDD failed");
-			adf_nbuf_free(buf);
-		}
-		buf = next_buf;
+	ret = data_rx(vos_ctx, buf_list, staid);
+	if (ret != VOS_STATUS_SUCCESS) {
+		TLSHIM_LOGE("Frame Rx to HDD failed");
+		goto free_buf;
 	}
 	return;
 
@@ -1132,7 +1146,6 @@ adf_nbuf_t WLANTL_SendSTA_DataFrame(void *vos_ctx, u_int8_t sta_id,
 	adf_nbuf_t ret;
 	struct ol_txrx_peer_t *peer;
 
-	ENTER();
 	if (!tl_shim) {
 		TLSHIM_LOGE("tl_shim is NULL");
 		return skb;
@@ -1144,7 +1157,7 @@ adf_nbuf_t WLANTL_SendSTA_DataFrame(void *vos_ctx, u_int8_t sta_id,
 	}
 
 	if (vos_is_load_unload_in_progress(VOS_MODULE_ID_TL, NULL)) {
-		TLSHIM_LOGP("%s: Driver load/unload in progress", __func__);
+		TLSHIM_LOGW("%s: Driver load/unload in progress", __func__);
 		return skb;
 	}
 	/*
@@ -1614,7 +1627,9 @@ VOS_STATUS WLANTL_ChangeSTAState(void *vos_ctx, u_int8_t sta_id,
 	peer = ol_txrx_peer_find_by_local_id(
 			((pVosContextType) vos_ctx)->pdev_txrx_ctx,
 			sta_id);
-	if (!peer)
+
+	if ((peer == NULL) ||
+                (adf_os_atomic_read(&peer->delete_in_progress) == 1))
 		return VOS_STATUS_E_FAULT;
 
 	if (sta_state == WLANTL_STA_CONNECTED)
@@ -1958,6 +1973,9 @@ VOS_STATUS WLANTL_Open(void *vos_ctx, WLANTL_ConfigInfoType *tl_cfg)
 	tl_shim->ip_checksum_offload = tl_cfg->ip_checksum_offload;
 	tl_shim->delay_interval = tl_cfg->uDelayedTriggerFrmInt;
 	tl_shim->enable_rxthread = tl_cfg->enable_rxthread;
+	if (tl_shim->enable_rxthread)
+		TLSHIM_LOGE("TL Shim RX thread enabled");
+
 	return status;
 }
 
@@ -2032,6 +2050,20 @@ void *tl_shim_get_vdev_by_sta_id(void *vos_context, uint8_t sta_id)
 	}
 
 	return peer->vdev;
+}
+
+void
+WLANTL_PauseUnPauseQs(void *vos_context, v_BOOL_t flag)
+{
+	ol_txrx_pdev_handle pdev = vos_get_context(VOS_MODULE_ID_TXRX,
+					vos_context);
+
+	if (true == flag)
+		wdi_in_pdev_pause(pdev,
+				   OL_TXQ_PAUSE_REASON_VDEV_SUSPEND);
+	else
+		wdi_in_pdev_unpause(pdev,
+				   OL_TXQ_PAUSE_REASON_VDEV_SUSPEND);
 }
 
 #ifdef QCA_LL_TX_FLOW_CT

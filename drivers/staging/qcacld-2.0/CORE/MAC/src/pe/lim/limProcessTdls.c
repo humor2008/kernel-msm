@@ -550,22 +550,16 @@ static void PopulateDot11fTdlsHtVhtCap(tpAniSirGlobal pMac, uint32 selfDot11Mode
     {
         /* Include HT Capability IE */
         PopulateDot11fHTCaps( pMac, NULL, htCap );
-        htCap->present = 1;
-        if (psessionEntry->currentOperChannel <= SIR_11B_CHANNEL_END)
-        {
-            /* hardcode NO channel bonding in 2.4Ghz */
-            htCap->supportedChannelWidthSet = 0;
-        }
-        else
-        {
-            //Placeholder to support different channel bonding mode of TDLS than AP.
-            htCap->supportedChannelWidthSet = 1; // hardcode it to max
-        }
+
+        /* Set channel width to 1 to indicate HT40 capability on TDLS link */
+        htCap->supportedChannelWidthSet = 1;
     }
     else
     {
         htCap->present = 0;
     }
+    limLog(pMac, LOG1, FL("HT present = %hu, Chan Width = %hu"),
+           htCap->present, htCap->supportedChannelWidthSet);
 #ifdef WLAN_FEATURE_11AC
     if (((psessionEntry->currentOperChannel <= SIR_11B_CHANNEL_END) &&
           pMac->roam.configParam.enableVhtFor24GHz) ||
@@ -591,6 +585,8 @@ static void PopulateDot11fTdlsHtVhtCap(tpAniSirGlobal pMac, uint32 selfDot11Mode
         /* Vht Disable from ini in 2.4 GHz */
         vhtCap->present = 0;
     }
+    limLog(pMac, LOG1, FL("VHT present = %hu, Chan Width = %hu"),
+           vhtCap->present, vhtCap->supportedChannelWidthSet);
 #endif
 }
 
@@ -2181,7 +2177,8 @@ limTdlsPopulateMatchingRateSet(tpAniSirGlobal pMac,
 static void limTdlsUpdateHashNodeInfo(tpAniSirGlobal pMac, tDphHashNode *pStaDs,
               tSirTdlsAddStaReq *pTdlsAddStaReq, tpPESession psessionEntry)
 {
-    tDot11fIEHTCaps htCap, *htCaps;
+    tDot11fIEHTCaps htCap = {0,};
+    tDot11fIEHTCaps *htCaps;
     tDot11fIEVHTCaps *pVhtCaps = NULL;
     tDot11fIEVHTCaps *pVhtCaps_txbf = NULL;
 #ifdef WLAN_FEATURE_11AC
@@ -2992,6 +2989,10 @@ static void limTdlsGetIntersection(tANI_U8 *input_array1,tANI_U8 input1_length,
                             tANI_U8 *output_array,tANI_U8 *output_length)
 {
     tANI_U8 i,j,k=0,flag=0;
+
+    if (input1_length > WNI_CFG_VALID_CHANNEL_LIST_LEN)
+       input1_length = WNI_CFG_VALID_CHANNEL_LIST_LEN;
+
     for(i=0;i<input1_length;i++)
     {
         flag=0;
@@ -3078,7 +3079,8 @@ tSirRetStatus limProcesSmeTdlsLinkEstablishReq(tpAniSirGlobal pMac,
         return eSIR_MEM_ALLOC_FAILED;
     }
 
-    vos_mem_set( (tANI_U8 *)pMsgTdlsLinkEstablishReq, sizeof(tpTdlsLinkEstablishParams), 0);
+    vos_mem_set((tANI_U8 *)pMsgTdlsLinkEstablishReq,
+                sizeof(tTdlsLinkEstablishParams), 0);
 
     pMsgTdlsLinkEstablishReq->staIdx = pStaDs->staIndex;
     pMsgTdlsLinkEstablishReq->isResponder = pTdlsLinkEstablishReq->isResponder;
@@ -3088,8 +3090,9 @@ tSirRetStatus limProcesSmeTdlsLinkEstablishReq(tpAniSirGlobal pMac,
     pMsgTdlsLinkEstablishReq->isOffChannelSupported =
                                 pTdlsLinkEstablishReq->isOffChannelSupported;
 
-    if ( 0 != pTdlsLinkEstablishReq->supportedChannelsLen)
-    {
+    if ((pTdlsLinkEstablishReq->supportedChannelsLen > 0) &&
+        (pTdlsLinkEstablishReq->supportedChannelsLen <=
+                SIR_MAC_MAX_SUPP_CHANNELS)) {
         tANI_U32   selfNumChans = WNI_CFG_VALID_CHANNEL_LIST_LEN;
         tANI_U8    selfSupportedChannels[WNI_CFG_VALID_CHANNEL_LIST_LEN];
         if (wlan_cfgGetStr(pMac, WNI_CFG_VALID_CHANNEL_LIST,

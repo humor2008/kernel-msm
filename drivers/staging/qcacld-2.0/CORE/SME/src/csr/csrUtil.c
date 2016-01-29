@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -145,7 +145,7 @@ static tCsrIELenInfo gCsrIELengthTable[] = {
 /* 057 */ { 0, 255 },
 /* 058 */ { 0, 255 },
 /* 059 */ { 0, 255 },
-/* 060 */ { SIR_MAC_CHNL_EXTENDED_SWITCH_ANN_EID_MIN, SIR_MAC_CHNL_EXTENDED_SWITCH_ANN_EID_MAX},
+/* 060 */ { 0, 255 },
 /* 061 */ { 0, 255 },
 /* 062 */ { 0, 255 },
 /* 063 */ { 0, 255 },
@@ -835,8 +835,6 @@ v_U16_t csrCheckConcurrentChannelOverlap(tpAniSirGlobal pMac, v_U16_t sap_ch,
                             VOS_STA_SAP_MODE)) &&
                        (pSession->connectState !=
                              eCSR_ASSOC_STATE_TYPE_NOT_CONNECTED)) {
-                if (pSession->ch_switch_in_progress)
-                          continue;
                 if (sap_ch  == 0) {
                     sap_ch = pSession->connectedProfile.operationChannel;
                     csrGetChFromHTProfile(pMac,
@@ -948,6 +946,7 @@ tANI_BOOLEAN csrIsP2pSessionConnected( tpAniSirGlobal pMac )
     tCsrRoamSession *pSession = NULL;
     tANI_U32 countP2pCli = 0;
     tANI_U32 countP2pGo = 0;
+    tANI_U32 countSAP = 0;
 
     for( i = 0; i < CSR_ROAM_SESSION_MAX; i++ )
     {
@@ -964,6 +963,11 @@ tANI_BOOLEAN csrIsP2pSessionConnected( tpAniSirGlobal pMac )
                 if (pSession->pCurRoamProfile->csrPersona == VOS_P2P_GO_MODE) {
                     countP2pGo++;
                 }
+                if (pSession->pCurRoamProfile->csrPersona ==
+                                                   VOS_STA_SAP_MODE) {
+                    countSAP++;
+                }
+
             }
         }
     }
@@ -972,7 +976,7 @@ tANI_BOOLEAN csrIsP2pSessionConnected( tpAniSirGlobal pMac )
      * - at least one P2P CLI session is connected
      * - at least one P2P GO session is connected
      */
-    if ( (countP2pCli > 0) || (countP2pGo > 0 ) ) {
+    if ((countP2pCli > 0) || (countP2pGo > 0 ) || (countSAP > 0)) {
         fRc = eANI_BOOLEAN_TRUE;
     }
 
@@ -1657,13 +1661,13 @@ eHalStatus csrGetPhyModeFromBss(tpAniSirGlobal pMac, tSirBssDescription *pBSSDes
         if(pIes->HTCaps.present && (eCSR_DOT11_MODE_TAURUS != phyMode))
         {
             phyMode = eCSR_DOT11_MODE_11n;
+#ifdef WLAN_FEATURE_11AC
+            if (IS_BSS_VHT_CAPABLE(pIes->VHTCaps)) {
+                 phyMode = eCSR_DOT11_MODE_11ac;
+            }
+#endif
         }
 
-#ifdef WLAN_FEATURE_11AC
-        if (IS_BSS_VHT_CAPABLE(pIes->VHTCaps)) {
-             phyMode = eCSR_DOT11_MODE_11ac;
-        }
-#endif
         *pPhyMode = phyMode;
     }
 
@@ -1888,7 +1892,7 @@ tANI_BOOLEAN csrIsPhyModeMatch( tpAniSirGlobal pMac, tANI_U32 phyMode,
                                 tDot11fBeaconIEs *pIes)
 {
     tANI_BOOLEAN fMatch = FALSE;
-    eCsrPhyMode phyModeInBssDesc = eCSR_DOT11_MODE_TAURUS, phyMode2 = eCSR_DOT11_MODE_TAURUS;
+    eCsrPhyMode phyModeInBssDesc, phyMode2;
     eCsrCfgDot11Mode cfgDot11ModeToUse = eCSR_CFG_DOT11_MODE_TAURUS;
     tANI_U32 bitMask, loopCount;
 
@@ -4443,13 +4447,24 @@ tANI_BOOLEAN csrIsSsidMatch( tpAniSirGlobal pMac, tANI_U8 *ssid1, tANI_U8 ssid1L
     tANI_BOOLEAN fMatch = FALSE;
 
     do {
+        /*
+         * Check for the specification of the Broadcast SSID at the beginning
+         * of the list. If specified, then all SSIDs are matches
+         * (broadcast SSID means accept all SSIDs).
+         */
+        if (ssid1Len == 0) {
+            fMatch = TRUE;
+            break;
+        }
 
-        // There are a few special cases.  If the Bss description has a Broadcast SSID,
-        // then our Profile must have a single SSID without Wildcards so we can program
-        // the SSID.
-        // SSID could be suppressed in beacons. In that case SSID IE has valid length
-        // but the SSID value is all NULL characters. That condition is trated same
-        // as NULL SSID
+        /*
+         * There are a few special cases. If the Bss description has a
+         * Broadcast SSID, then our Profile must have a single SSID without
+         * Wild cards so we can program the SSID.
+         * SSID could be suppressed in beacons. In that case SSID IE has valid
+         * length but the SSID value is all NULL characters.
+         * That condition is treated same as NULL SSID.
+         */
         if ( csrIsNULLSSID( bssSsid, bssSsidLen ) )
         {
             if ( eANI_BOOLEAN_FALSE == fSsidRequired )
@@ -4457,14 +4472,6 @@ tANI_BOOLEAN csrIsSsidMatch( tpAniSirGlobal pMac, tANI_U8 *ssid1, tANI_U8 ssid1L
                 fMatch = TRUE;
                 break;
             }
-        }
-
-        // Check for the specification of the Broadcast SSID at the beginning of the list.
-        // If specified, then all SSIDs are matches (broadcast SSID means accept all SSIDs).
-        if ( ssid1Len == 0 )
-        {
-            fMatch = TRUE;
-            break;
         }
 
         if(ssid1Len != bssSsidLen) break;
@@ -4908,11 +4915,14 @@ tANI_BOOLEAN csrMatchBSS( tHalHandle hHal, tSirBssDescription *pBssDesc, tCsrSca
                           tDot11fBeaconIEs **ppIes)
 {
     tpAniSirGlobal pMac = PMAC_STRUCT( hHal );
-    tANI_BOOLEAN fRC = eANI_BOOLEAN_FALSE, fCheck;
+    tANI_BOOLEAN fRC = eANI_BOOLEAN_FALSE, fCheck, blacklist_check;
     tANI_U32 i;
     tDot11fBeaconIEs *pIes = NULL;
     tANI_U8 *pb;
+    tCsrBssid *blacklist_bssid = NULL;
+    struct roam_ext_params *roam_params;
 
+    roam_params = &pMac->roam.configParam.roam_params;
     do {
         if( ( NULL == ppIes ) || ( *ppIes ) == NULL )
         {
@@ -4932,7 +4942,24 @@ tANI_BOOLEAN csrMatchBSS( tHalHandle hHal, tSirBssDescription *pBssDesc, tCsrSca
         fCheck = (!pFilter->p2pResult || pIes->P2PBeaconProbeRes.present);
         if(!fCheck) break;
 
-        if(pIes->SSID.present)
+        /* Check for Blacklist BSSID's and avoid connections */
+        blacklist_check = false;
+        blacklist_bssid = (tCsrBssid *)&roam_params->bssid_avoid_list;
+        for (i = 0; i < roam_params->num_bssid_avoid_list; i++) {
+          if (csrIsMacAddressEqual(pMac, blacklist_bssid,
+               (tCsrBssid *)pBssDesc->bssId)) {
+                 blacklist_check = true;
+                 break;
+          }
+          blacklist_bssid++;
+        }
+        if(blacklist_check) {
+            VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_ERROR,
+              "Do not Attempt connection to blacklist bssid");
+            break;
+        }
+
+	if(pIes->SSID.present)
         {
             for(i = 0; i < pFilter->SSIDs.numOfSSIDs; i++)
             {
@@ -4958,7 +4985,6 @@ tANI_BOOLEAN csrMatchBSS( tHalHandle hHal, tSirBssDescription *pBssDesc, tCsrSca
             }
         }
         if(!fCheck) break;
-
         fCheck = eANI_BOOLEAN_TRUE;
         for(i = 0; i < pFilter->ChannelInfo.numOfChannels; i++)
         {
@@ -5979,5 +6005,37 @@ VOS_STATUS csrAddToChannelListFront(
     pChannelList[0] = channel;
 
     return eHAL_STATUS_SUCCESS;
+}
+#endif
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
+/**
+ * csr_diag_event_report() - send PE diag event
+ * @pmac:        pointer to global MAC context.
+ * @event_typev: sub event type for DIAG event.
+ * @status:      status of the event
+ * @reasoncode:  reasoncode for the given status
+ *
+ * This function is called to send diag event
+ *
+ * Return:   NA
+ */
+
+void csr_diag_event_report(tpAniSirGlobal pmac, uint16_t event_type,
+			   uint16_t status, uint16_t reasoncode)
+{
+	tSirMacAddr nullbssid = { 0, 0, 0, 0, 0, 0 };
+	WLAN_VOS_DIAG_EVENT_DEF(diag_event, vos_event_wlan_pe_payload_type);
+
+	vos_mem_set(&diag_event, sizeof(vos_event_wlan_pe_payload_type), 0);
+
+	vos_mem_copy(diag_event.bssid, nullbssid, sizeof(tSirMacAddr));
+	diag_event.sme_state = (tANI_U16)pmac->lim.gLimSmeState;
+	diag_event.mlm_state = (tANI_U16)pmac->lim.gLimMlmState;
+	diag_event.event_type = event_type;
+	diag_event.status = status;
+	diag_event.reason_code = reasoncode;
+
+	WLAN_VOS_DIAG_EVENT_REPORT(&diag_event, EVENT_WLAN_PE);
+	return;
 }
 #endif

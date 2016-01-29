@@ -142,8 +142,17 @@ void pe_reset_protection_callback(void *ptr)
     vos_mem_zero(&pe_session_entry->beaconParams,
                  sizeof(pe_session_entry->beaconParams));
 
+    vos_mem_zero(&mac_ctx->lim.gLimOverlap11gParams,
+                 sizeof(mac_ctx->lim.gLimOverlap11gParams));
+    vos_mem_zero(&mac_ctx->lim.gLimOverlap11aParams,
+                 sizeof(mac_ctx->lim.gLimOverlap11aParams));
+    vos_mem_zero(&mac_ctx->lim.gLimOverlapHt20Params,
+                 sizeof(mac_ctx->lim.gLimOverlapHt20Params));
+    vos_mem_zero(&mac_ctx->lim.gLimOverlapNonGfParams,
+                 sizeof(mac_ctx->lim.gLimOverlapNonGfParams));
+
     /* index 0, is self node, peers start from 1 */
-    for(i = 1 ; i < mac_ctx->lim.gLimAssocStaLimit ; i++)
+    for(i = 1 ; i <= mac_ctx->lim.gLimAssocStaLimit ; i++)
     {
         station_hash_node = dphGetHashEntry(mac_ctx, i,
                               &pe_session_entry->dph.dphHashTable);
@@ -156,7 +165,7 @@ void pe_reset_protection_callback(void *ptr)
     if ((current_protection_state != pe_session_entry->old_protection_state) &&
         (VOS_FALSE == mac_ctx->sap.SapDfsInfo.is_dfs_cac_timer_running)) {
         VOS_TRACE(VOS_MODULE_ID_PE,
-                  VOS_TRACE_LEVEL_INFO,
+                  VOS_TRACE_LEVEL_ERROR,
                   FL("protection changed, update beacon template\n"));
         /* update beacon fix params and send update to FW */
         vos_mem_zero(&beacon_params, sizeof(tUpdateBeaconParams));
@@ -310,6 +319,7 @@ tpPESession peCreateSession(tpAniSirGlobal pMac,
                MAC_ADDRESS_STR " Max No. of STA %d",
                pMac->lim.gpSession[i].peSessionId,
                MAC_ADDR_ARRAY(bssid), numSta);
+            pMac->lim.gpSession[i].roaming_in_progress = false;
 
             /* Initialize PMM Ps Offload Module */
             if(pMac->psOffloadEnabled)
@@ -421,33 +431,6 @@ tpPESession peFindSessionByBssid(tpAniSirGlobal pMac,  tANI_U8*  bssid,    tANI_
 
 }
 
-/**
- * pe_find_session_by_sme_session_id() - looks up the PE session for given sme
- * session id
- * @mac_ctx:          pointer to global adapter context
- * @sme_session_id:   sme session id
- *
- * looks up the PE session for given sme session id
- *
- * Return: pe session entry for given sme session if found else NULL
- */
-tpPESession pe_find_session_by_sme_session_id(tpAniSirGlobal mac_ctx,
-                                       tANI_U8 sme_session_id)
-{
-	uint8_t i;
-	for (i = 0; i < mac_ctx->lim.maxBssId; i++) {
-		if ( (mac_ctx->lim.gpSession[i].valid) &&
-		  (mac_ctx->lim.gpSession[i].smeSessionId ==
-					sme_session_id) ) {
-			return &mac_ctx->lim.gpSession[i];
-		}
-	}
-	limLog(mac_ctx, LOG4,
-	  FL("Session lookup fails for smeSessionID: %d"),
-	  sme_session_id);
-	return NULL;
-}
-
 
 /*--------------------------------------------------------------------------
   \brief peFindSessionByBssIdx() - looks up the PE session given the bssIdx.
@@ -472,6 +455,33 @@ tpPESession peFindSessionByBssIdx(tpAniSirGlobal pMac,  tANI_U8 bssIdx)
     }
     limLog(pMac, LOG4, FL("Session lookup fails for bssIdx: %d"), bssIdx);
     return NULL;
+}
+
+/**
+ * pe_find_session_by_sme_session_id() - looks up the PE session for given sme
+ * session id
+ * @mac_ctx:          pointer to global adapter context
+ * @sme_session_id:   sme session id
+ *
+ * looks up the PE session for given sme session id
+ *
+ * Return: pe session entry for given sme session if found else NULL
+ */
+tpPESession pe_find_session_by_sme_session_id(tpAniSirGlobal mac_ctx,
+                                        tANI_U8 sme_session_id)
+{
+        uint8_t i;
+        for (i = 0; i < mac_ctx->lim.maxBssId; i++) {
+                if ( (mac_ctx->lim.gpSession[i].valid) &&
+                    (mac_ctx->lim.gpSession[i].smeSessionId ==
+                        sme_session_id) ) {
+                        return &mac_ctx->lim.gpSession[i];
+                }
+        }
+        limLog(mac_ctx, LOG4,
+               FL("Session lookup fails for smeSessionID: %d"),
+               sme_session_id);
+        return NULL;
 }
 
 /*--------------------------------------------------------------------------
@@ -577,6 +587,11 @@ void peDeleteSession(tpAniSirGlobal pMac, tpPESession psessionEntry)
                 tx_timer_deactivate(timer_ptr);
             }
         }
+    }
+
+    if (LIM_IS_AP_ROLE(psessionEntry)) {
+       vos_timer_stop(&psessionEntry->protection_fields_reset_timer);
+       vos_timer_destroy(&psessionEntry->protection_fields_reset_timer);
     }
 
 #if defined (WLAN_FEATURE_VOWIFI_11R)
@@ -747,11 +762,6 @@ void peDeleteSession(tpAniSirGlobal pMac, tpPESession psessionEntry)
         vos_timer_destroy(&psessionEntry->pmfComebackTimer);
     }
 #endif
-
-    if (LIM_IS_AP_ROLE(psessionEntry)) {
-       vos_timer_stop(&psessionEntry->protection_fields_reset_timer);
-       vos_timer_destroy(&psessionEntry->protection_fields_reset_timer);
-    }
 
     psessionEntry->valid = FALSE;
     return;

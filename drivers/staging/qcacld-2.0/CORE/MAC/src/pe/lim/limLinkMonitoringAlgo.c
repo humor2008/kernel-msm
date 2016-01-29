@@ -100,16 +100,16 @@ limDeleteStaContext(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
     tpDeleteStaContext  pMsg = (tpDeleteStaContext)limMsg->bodyptr;
     tpDphHashNode       pStaDs;
     tpPESession psessionEntry ;
-    tANI_U8     sessionId;
 
     if(NULL == pMsg)
     {
         PELOGE(limLog(pMac, LOGE,FL("Invalid body pointer in message"));)
         return;
     }
-    if((psessionEntry = peFindSessionByBssid(pMac,pMsg->bssId,&sessionId))== NULL)
+    psessionEntry = pe_find_session_by_sme_session_id(pMac, pMsg->vdev_id);
+    if(NULL == psessionEntry)
     {
-        PELOGE(limLog(pMac, LOGE,FL("session does not exist for given BSSId"));)
+        limLog(pMac, LOGE, FL("session not found for given sme session"));
         vos_mem_free(pMsg);
         return;
     }
@@ -117,8 +117,50 @@ limDeleteStaContext(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
     switch(pMsg->reasonCode)
     {
         case HAL_DEL_STA_REASON_CODE_KEEP_ALIVE:
-        case HAL_DEL_STA_REASON_CODE_TIM_BASED:
-             PELOGE(limLog(pMac, LOGE, FL(" Deleting station: staId = %d, reasonCode = %d"), pMsg->staId, pMsg->reasonCode);)
+             if (LIM_IS_STA_ROLE(psessionEntry) && !pMsg->is_tdls) {
+                 /*
+                  * If roaming is in progress, then ignore the STA kick out
+                  * and let the connection happen. The roaming_in_progress
+                  * flag is set whenever a candidate found indication is
+                  * received. It is enabled on the PE session for which
+                  * the indication is received. There is really no need to
+                  * re-set the flag, since the PE session on which it was
+                  * set will be deleted, even if roaming is success or failure.
+                  * When roaming is a success, the PE session for AP1 is
+                  * deleted. When we get a candidate indication, it would be
+                  * on the PE session of the AP1. AP2 to which we are about to
+                  * roam will have a new PE session ID.If roaming fails for
+                  * any reason, then it will anyways delete the PE session of
+                  * of the AP1.
+                  */
+                 if (psessionEntry->roaming_in_progress ||
+                      limIsReassocInProgress(pMac, psessionEntry)) {
+                     limLog(pMac, LOGE,
+                        FL("roam_progress=%d, reassoc=%d. Not disconnecting"),
+                           psessionEntry->roaming_in_progress,
+                           limIsReassocInProgress(pMac, psessionEntry));
+                     vos_mem_free(pMsg);
+                     return;
+                 }
+                 pStaDs = dphGetHashEntry(pMac,
+                                          DPH_STA_HASH_INDEX_PEER,
+                                          &psessionEntry->dph.dphHashTable);
+                 if (NULL == pStaDs) {
+                     limLog(pMac, LOGE, FL("Dph entry not found."));
+                     vos_mem_free(pMsg);
+                     return;
+                 }
+                 pStaDs->del_sta_ctx_rssi = pMsg->rssi;
+                 limSendDeauthMgmtFrame(pMac,
+                                   eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON,
+                                   pMsg->addr2, psessionEntry, FALSE);
+                 limTearDownLinkWithAp(pMac, psessionEntry->peSessionId,
+                                 eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON);
+                 /* only break for STA role (non TDLS) */
+                 break;
+             }
+             limLog(pMac, LOGE, FL("Deleting sta: staId %d, reasonCode %d"),
+                             pMsg->staId, pMsg->reasonCode);
              if (eLIM_STA_IN_IBSS_ROLE == psessionEntry->limSystemRole)
                  return;
 
@@ -174,6 +216,7 @@ limDeleteStaContext(tpAniSirGlobal pMac, tpSirMsgQ limMsg)
                     // Issue Deauth Indication to SME.
                     vos_mem_copy((tANI_U8 *) &mlmDeauthInd.peerMacAddr,
                                   pStaDs->staAddr, sizeof(tSirMacAddr));
+
                     mlmDeauthInd.reasonCode    = (tANI_U8) pStaDs->mlmStaContext.disassocReason;
                     mlmDeauthInd.deauthTrigger =  pStaDs->mlmStaContext.cleanupTrigger;
 
@@ -373,6 +416,31 @@ limTearDownLinkWithAp(tpAniSirGlobal pMac, tANI_U8 sessionId, tSirMacReasonCodes
         vos_mem_copy((tANI_U8 *) &mlmDeauthInd.peerMacAddr,
                       pStaDs->staAddr,
                       sizeof(tSirMacAddr));
+
+        /*
+         * if sendDeauthBeforeCon is enabled and reasoncode is
+         * Beacon Missed Store the MAC of AP in the flip flop
+         * buffer. This MAC will be used to send Deauth before
+         * connection, if we connect to same AP after HB failure.
+        */
+        if (pMac->roam.configParam.sendDeauthBeforeCon &&
+                          eSIR_BEACON_MISSED == reasonCode)
+        {
+            int apCount = pMac->lim.gLimHeartBeatApMacIndex;
+
+            if (pMac->lim.gLimHeartBeatApMacIndex)
+                pMac->lim.gLimHeartBeatApMacIndex = 0;
+            else
+                pMac->lim.gLimHeartBeatApMacIndex = 1;
+
+            limLog(pMac, LOGE, FL("HB Failure on MAC "
+                   MAC_ADDRESS_STR" Store it on Index %d"),
+                   MAC_ADDR_ARRAY(pStaDs->staAddr),apCount);
+
+            sirCopyMacAddr(pMac->lim.gLimHeartBeatApMac[apCount],
+                                                    pStaDs->staAddr);
+        }
+
         mlmDeauthInd.reasonCode    = (tANI_U8) pStaDs->mlmStaContext.disassocReason;
         mlmDeauthInd.deauthTrigger =  pStaDs->mlmStaContext.cleanupTrigger;
 
@@ -478,7 +546,8 @@ void limHandleHeartBeatFailure(tpAniSirGlobal pMac,tpPESession psessionEntry)
             }
             /* Connected on DFS channel so should not send the probe request
             * tear down the link directly */
-            limTearDownLinkWithAp(pMac, psessionEntry->peSessionId, eSIR_MAC_UNSPEC_FAILURE_REASON);
+            limTearDownLinkWithAp(pMac, psessionEntry->peSessionId,
+                                                       eSIR_BEACON_MISSED);
         }
     }
     else

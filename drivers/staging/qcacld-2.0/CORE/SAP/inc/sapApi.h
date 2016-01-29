@@ -210,7 +210,6 @@ typedef enum {
 #ifdef FEATURE_WLAN_AP_AP_ACS_OPTIMIZE
     eSAP_ACS_SCAN_SUCCESS_EVENT,
 #endif
-    eSAP_ECSA_CHANGE_CHAN_IND,
 } eSapHddEvent;
 
 typedef enum {
@@ -408,15 +407,6 @@ typedef struct sap_DfsNolInfo_s {
    v_PVOID_t pDfsList;       /* pointer to pDfsList buffer */
 } tSap_DfsNolInfo;
 
-/**
- * struct sap_ch_change_ind - channel change indication
- * @new_chan: channel to change
- */
-struct sap_ch_change_ind {
-	uint16_t new_chan;
-};
-
-
 /*
    This struct will be filled in and passed to tpWLAN_SAPEventCB that is provided during WLANSAP_StartBss call
    The event id corresponding to structure  in the union is defined in comment next to the structure
@@ -442,8 +432,6 @@ typedef struct sap_Event_s {
         tSap_MaxAssocExceededEvent                sapMaxAssocExceeded; /* eSAP_MAX_ASSOC_EXCEEDED */
         tSap_OperatingChannelChangeEvent          sapChannelChange; /* eSAP_CHANNEL_CHANGE_EVENT */
         tSap_DfsNolInfo                           sapDfsNolInfo;    /*eSAP_DFS_NOL_XXX */
-        /*eSAP_ACS_CHANNEL_SELECTED */
-        struct sap_ch_change_ind                  sap_chan_cng_ind;
     } sapevt;
 } tSap_Event, *tpSap_Event;
 
@@ -1229,7 +1217,7 @@ VOS_STATUS
 WLANSAP_DisassocSta
 (
     v_PVOID_t pvosGCtx,
-    v_U8_t *pPeerStaMac
+    struct tagCsrDelStaParams *pDelStaParams
 );
 
 /*==========================================================================
@@ -1245,7 +1233,8 @@ WLANSAP_DisassocSta
 
     IN
     pvosGCtx            : Pointer to vos global context structure
-    pPeerStaMac         : Mac address of the station to deauthenticate
+    pDelStaParams       : Pointer to parameters of the station to
+                          deauthenticate
 
   RETURN VALUE
     The VOS_STATUS code associated with performing the operation
@@ -1258,7 +1247,7 @@ VOS_STATUS
 WLANSAP_DeauthSta
 (
     v_PVOID_t pvosGCtx,
-    v_U8_t *pPeerStaMac
+    struct tagCsrDelStaParams *pDelStaParams
 );
 
 /*==========================================================================
@@ -2317,6 +2306,30 @@ WLANSAP_Get_DfsNol(v_PVOID_t pSapCtx);
 VOS_STATUS
 WLANSAP_Set_DfsNol(v_PVOID_t pSapCtx, eSapDfsNolType conf);
 
+/*==========================================================================
+  FUNCTION    WLANSAP_PopulateDelStaParams
+
+  DESCRIPTION
+  This API is used to populate del station parameters
+  DEPENDENCIES
+  NA.
+
+  PARAMETERS
+  IN
+  mac:           pointer to peer mac address.
+  reason_code:   Reason code for the disassoc/deauth.
+  subtype:       subtype points to either disassoc/deauth frame.
+  pDelStaParams: address where parameters to be populated.
+
+  RETURN VALUE NONE
+
+  SIDE EFFECTS
+============================================================================*/
+
+void WLANSAP_PopulateDelStaParams(const v_U8_t *mac,
+                                  v_U16_t reason_code,
+                                  v_U8_t subtype,
+                                  struct tagCsrDelStaParams *pDelStaParams);
 #ifdef __cplusplus
  }
 #endif

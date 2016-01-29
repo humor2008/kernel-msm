@@ -174,7 +174,9 @@ static OS_TIMER_FUNC(dfs_task)
              */
             OS_CANCEL_TIMER(&dfs->ath_dfstesttimer);
             dfs->ath_dfstest = 1;
+            adf_os_spin_lock_bh(&ic->chan_lock);
             dfs->ath_dfstest_ieeechan = ic->ic_curchan->ic_ieee;
+            adf_os_spin_unlock_bh(&ic->chan_lock);
             dfs->ath_dfstesttime = 1;   /* 1ms */
             OS_SET_TIMER(&dfs->ath_dfstesttimer, dfs->ath_dfstesttime);
         }
@@ -266,10 +268,11 @@ dfs_attach(struct ieee80211com *ic)
     ic->ic_dfs_attach(ic, &dfs->dfs_caps, &radar_info);
     dfs_clear_stats(ic);
     dfs->dfs_event_log_on = 0;
-    OS_INIT_TIMER(NULL, &(dfs->ath_dfs_task_timer), dfs_task, (void *) (ic));
+    OS_INIT_TIMER(NULL, &(dfs->ath_dfs_task_timer), dfs_task, (void *) (ic),
+           ADF_DEFERRABLE_TIMER);
 #ifndef ATH_DFS_RADAR_DETECTION_ONLY
     OS_INIT_TIMER(NULL, &(dfs->ath_dfstesttimer), dfs_testtimer_task,
-        (void *) ic);
+        (void *) ic, ADF_DEFERRABLE_TIMER);
     dfs->ath_dfs_cac_time = ATH_DFS_WAIT_MS;
     dfs->ath_dfstesttime = ATH_DFS_TEST_RETURN_PERIOD_MS;
 #endif

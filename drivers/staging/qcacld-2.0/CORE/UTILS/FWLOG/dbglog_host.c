@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -60,9 +60,10 @@
 static bool appstarted = FALSE;
 static bool senddriverstatus = FALSE;
 static bool kd_nl_init = FALSE;
-static int cnss_diag_pid = 0;
+static int cnss_diag_pid = INVALID_PID;
 static int get_version = 0;
 static int gprint_limiter = 0;
+static bool tgt_assert_enable = 0;
 
 static ATH_DEBUG_MASK_DESCRIPTION g_fwlogDebugDescription[] = {
     {FWLOG_DEBUG,"fwlog"},
@@ -1647,13 +1648,10 @@ send_fw_diag_nl_data(wmi_unified_t wmi_handle, const u_int8_t *buffer,
     if (WARN_ON(len > ATH6KL_FWLOG_PAYLOAD_SIZE))
         return -ENODEV;
 
-    /* NL is not ready yet, WLAN KO started first */
-    if ((kd_nl_init) && (!cnss_diag_pid))
-    {
-        nl_srv_nl_ready_indication();
-    }
+    if (nl_srv_is_initialized() != 0)
+        return -EIO;
 
-    if (cnss_diag_pid)
+    if (vos_is_multicast_logging())
     {
         skb_out = nlmsg_new(len, 0);
         if (!skb_out)
@@ -1661,15 +1659,14 @@ send_fw_diag_nl_data(wmi_unified_t wmi_handle, const u_int8_t *buffer,
             AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("Failed to allocate new skb\n"));
             return -1;
         }
-        nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, len, 0);
+        nlh = nlmsg_put(skb_out, 0, 0, WLAN_NL_MSG_CNSS_DIAG, len, 0);
         memcpy(nlmsg_data(nlh), buffer, len);
-        NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
 
-        res = nl_srv_ucast(skb_out, cnss_diag_pid, MSG_DONTWAIT);
+        res = nl_srv_bcast(skb_out);
         if (res < 0)
         {
-            AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
-                            ("nl_srv_ucast failed 0x%x \n", res));
+            AR_DEBUG_PRINTF(ATH_DEBUG_RSVD1,
+                            ("%s: nl_srv_bcast failed 0x%x \n", __func__, res));
             return res;
         }
     }
@@ -1689,12 +1686,11 @@ send_diag_netlink_data(const u_int8_t *buffer,
     if (WARN_ON(len > ATH6KL_FWLOG_PAYLOAD_SIZE))
         return -ENODEV;
 
-    /* NL is not ready yet, WLAN KO started first */
-    if ((kd_nl_init) && (!cnss_diag_pid)) {
-        nl_srv_nl_ready_indication();
-    }
+    if (nl_srv_is_initialized() != 0)
+        return -EIO;
 
-    if (cnss_diag_pid) {
+
+    if (vos_is_multicast_logging()) {
         slot_len = sizeof(*slot) + ATH6KL_FWLOG_PAYLOAD_SIZE;
 
         skb_out = nlmsg_new(slot_len, 0);
@@ -1704,7 +1700,7 @@ send_diag_netlink_data(const u_int8_t *buffer,
             return -1;
         }
 
-        nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, slot_len, 0);
+        nlh = nlmsg_put(skb_out, 0, 0, WLAN_NL_MSG_CNSS_DIAG, slot_len, 0);
         slot = (struct dbglog_slot *) nlmsg_data(nlh);
         slot->diag_type = cmd;
         slot->timestamp = cpu_to_le32(jiffies);
@@ -1712,12 +1708,11 @@ send_diag_netlink_data(const u_int8_t *buffer,
         /* Version mapped to get_version here */
         slot->dropped = get_version;
         memcpy(slot->payload, buffer, len);
-        NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
 
-        res = nl_srv_ucast(skb_out, cnss_diag_pid, MSG_DONTWAIT);
+        res = nl_srv_bcast(skb_out);
         if (res < 0) {
-            AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
-                            ("nl_srv_ucast failed 0x%x \n", res));
+            AR_DEBUG_PRINTF(ATH_DEBUG_RSVD1,
+                            ("%s: nl_srv_bcast failed 0x%x \n", __func__, res));
             return res;
         }
     }
@@ -1738,13 +1733,11 @@ dbglog_process_netlink_data(wmi_unified_t wmi_handle, const u_int8_t *buffer,
     if (WARN_ON(len > ATH6KL_FWLOG_PAYLOAD_SIZE))
         return -ENODEV;
 
-    /* NL is not ready yet, WLAN KO started first */
-    if ((kd_nl_init) && (!cnss_diag_pid))
-    {
-        nl_srv_nl_ready_indication();
-    }
+    if (nl_srv_is_initialized() != 0)
+            return -EIO;
 
-    if (cnss_diag_pid)
+
+    if (vos_is_multicast_logging())
     {
         slot_len = sizeof(*slot) + ATH6KL_FWLOG_PAYLOAD_SIZE;
 
@@ -1755,20 +1748,19 @@ dbglog_process_netlink_data(wmi_unified_t wmi_handle, const u_int8_t *buffer,
             return -1;
         }
 
-        nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, slot_len, 0);
+        nlh = nlmsg_put(skb_out, 0, 0, WLAN_NL_MSG_CNSS_DIAG, slot_len, 0);
         slot = (struct dbglog_slot *) nlmsg_data(nlh);
         slot->diag_type = (A_UINT32)DIAG_TYPE_FW_DEBUG_MSG;
         slot->timestamp = cpu_to_le32(jiffies);
         slot->length = cpu_to_le32(len);
         slot->dropped = cpu_to_le32(dropped);
         memcpy(slot->payload, buffer, len);
-        NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
 
-        res = nl_srv_ucast(skb_out, cnss_diag_pid, MSG_DONTWAIT);
+        res = nl_srv_bcast(skb_out);
         if (res < 0)
         {
-            AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
-                            ("nl_srv_ucast failed 0x%x \n", res));
+            AR_DEBUG_PRINTF(ATH_DEBUG_RSVD1,
+                            ("%s: nl_srv_bcast failed 0x%x \n", __func__, res));
             return res;
         }
     }
@@ -4026,6 +4018,11 @@ int cnss_diag_msg_callback(struct sk_buff *skb)
             AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
                            ("%s : DIAG_TYPE_CRASH_INJECT: %d %d\n", __func__,
                            slot->payload[0], slot->payload[1]));
+            if (!tgt_assert_enable) {
+                AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
+                               ("%s: tgt Assert Disabled\n", __func__));
+                return 0;
+            }
             process_wma_set_command_twoargs(0,
                                            (int)GEN_PARAM_CRASH_INJECT,
                                            slot->payload[0],
@@ -4056,7 +4053,6 @@ int cnss_diag_notify_wlan_close()
     if (0 != cnss_diag_pid)
     {
         cnss_diag_send_driver_unloaded();
-        nl_srv_nl_close_indication(cnss_diag_pid);
         cnss_diag_pid = 0;
     }
     return 0;
@@ -4213,7 +4209,7 @@ dbglog_init(wmi_unified_t wmi_handle)
     dbglog_reg_modprint(WLAN_MODULE_PCIELP, dbglog_pcielp_print_handler);
     dbglog_reg_modprint(WLAN_MODULE_IBSS_PWRSAVE,
                         dbglog_ibss_powersave_print_handler);
-
+    tgt_assert_enable = wmi_handle->tgt_force_assert_enable;
     /* Register handler for F3 or debug messages */
     res = wmi_unified_register_event_handler(wmi_handle, WMI_DEBUG_MESG_EVENTID,
                        dbglog_parse_debug_logs);
@@ -4260,6 +4256,7 @@ dbglog_deinit(wmi_unified_t wmi_handle)
     dbglog_debugfs_remove(wmi_handle);
 #endif /* WLAN_OPEN_SOURCE */
 
+    tgt_assert_enable = 0;
     res = wmi_unified_unregister_event_handler(wmi_handle, WMI_DEBUG_MESG_EVENTID);
     if(res != 0)
         return res;

@@ -92,9 +92,6 @@ regdm_op_class_map_t global_op_class[] = {
 	{125, 20, BW20,      {149, 153, 157, 161, 165, 169}},
 	{126, 40, BW40_LOW_PRIMARY,  {149, 157}},
 	{127, 40, BW40_HIGH_PRIMARY, {153, 161}},
-	{128, 80, BW80,      {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108,
-				112, 116, 120, 124, 128, 132, 136, 140, 144,
-				149, 153, 157, 161}},
 	{0, 0, 0, {0}},
 };
 
@@ -102,23 +99,19 @@ regdm_op_class_map_t global_op_class[] = {
 regdm_op_class_map_t us_op_class[] = {
 	{1, 20,  BW20,      {36, 40, 44, 48}},
 	{2, 20,  BW20,      {52, 56, 60, 64}},
-	{4, 20,  BW20,   {100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
-				144}},
+	{4, 20,  BW20,   {100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140}},
 	{5, 20,  BW20,      {149, 153, 157, 161, 165}},
 	{12, 25, BW20,      {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 	{22, 40, BW40_LOW_PRIMARY,  {36, 44}},
 	{23, 40, BW40_LOW_PRIMARY,  {52, 60}},
-	{24, 40, BW40_LOW_PRIMARY,  {100, 108, 116, 124, 132, 140}},
+	{24, 40, BW40_LOW_PRIMARY,  {100, 108, 116, 124, 132}},
 	{26, 40, BW40_LOW_PRIMARY,  {149, 157}},
 	{27, 40, BW40_HIGH_PRIMARY, {40, 48}},
 	{28, 40, BW40_HIGH_PRIMARY, {56, 64}},
-	{29, 40, BW40_HIGH_PRIMARY, {104, 112, 120, 128, 136, 144}},
+	{29, 40, BW40_HIGH_PRIMARY, {104, 112, 120, 128, 136}},
 	{31, 40, BW40_HIGH_PRIMARY, {153, 161}},
 	{32, 40, BW40_LOW_PRIMARY,  {1, 2, 3, 4, 5, 6, 7}},
 	{33, 40, BW40_HIGH_PRIMARY, {5, 6, 7, 8, 9, 10, 11}},
-	{128, 80, BW80,      {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108,
-				112, 116, 120, 124, 128, 132, 136, 140, 144,
-				149, 153, 157, 161}},
 	{0, 0, 0, {0}},
 };
 
@@ -137,8 +130,6 @@ regdm_op_class_map_t euro_op_class[] = {
 	{11, 40, BW40_LOW_PRIMARY,  {1, 2, 3, 4, 5, 6, 7, 8, 9}},
 	{12, 40, BW40_HIGH_PRIMARY, {5, 6, 7, 8, 9, 10, 11, 12, 13}},
 	{17, 20, BW20,      {149, 153, 157, 161, 165, 169}},
-	{128, 80, BW80,     {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112,
-				116, 120, 124, 128}},
 	{0, 0, 0, {0}},
 };
 
@@ -155,8 +146,6 @@ regdm_op_class_map_t japan_op_class[] = {
 	{41, 40, BW40_HIGH_PRIMARY, {40, 48}},
 	{42, 40, BW40_HIGH_PRIMARY, {56, 64}},
 	{44, 40, BW40_HIGH_PRIMARY, {104, 112, 120, 128, 136}},
-	{128, 80, BW80,     {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112,
-				116, 120, 124, 128}},
 	{0, 0, 0, {0}},
 };
 
@@ -294,13 +283,13 @@ static const COUNTRY_CODE_TO_ENUM_RD *get_country_from_rd(u_int16_t regdmn)
  * Some users have reported their EEPROM programmed with
  * 0x8000 set, this is not a supported regulatory domain
  * but since we have more than one user with it we need
- * a solution for them. We default to 0x64
+ * a solution for them. We default to WOR0_WORLD
  */
 static void regd_sanitize(struct regulatory *reg)
 {
 	if (reg->reg_domain != COUNTRY_ERD_FLAG)
 		return;
-	reg->reg_domain = 0x64;
+	reg->reg_domain = WOR0_WORLD;
 }
 
 /*
@@ -462,7 +451,7 @@ u_int32_t regdmn_getwmodesnreg(u_int32_t modesAvail,
 }
 
 void regdmn_get_ctl_info(struct regulatory *reg, u_int32_t modesAvail,
-     u_int32_t modeSelect)
+                         u_int32_t modeSelect)
 {
 	const REG_DOMAIN *regdomain2G = NULL;
 	const REG_DOMAIN *regdomain5G = NULL;
@@ -553,7 +542,7 @@ void regdmn_get_ctl_info(struct regulatory *reg, u_int32_t modesAvail,
 			ctl_5g = ctl;
 	}
 	wma_send_regdomain_info(reg->reg_domain, regpair->regDmn2GHz,
-			regpair->regDmn5GHz, ctl_2g, ctl_5g);
+				regpair->regDmn5GHz, ctl_2g, ctl_5g);
 }
 
 void regdmn_set_regval(struct regulatory *reg)
