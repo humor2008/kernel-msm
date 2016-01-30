@@ -34,6 +34,10 @@ void irq_work_queue(struct irq_work *work);
 void irq_work_run(void);
 void irq_work_sync(struct irq_work *work);
 
+#ifdef CONFIG_SMP
+bool irq_work_queue_on(struct irq_work *work, int cpu);
+#endif
+
 #ifdef CONFIG_IRQ_WORK
 bool irq_work_needs_cpu(void);
 #else

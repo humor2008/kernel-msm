@@ -19,7 +19,7 @@
 #include <asm/processor.h>
 
 
-static DEFINE_PER_CPU(struct llist_head, irq_work_list);
+static DEFINE_PER_CPU(struct llist_head, raised_list);
 static DEFINE_PER_CPU(int, irq_work_raised);
 
 /*
@@ -55,6 +55,33 @@ void __weak arch_irq_work_raise(void)
 	 */
 }
 
+#ifdef CONFIG_SMP
+/*
+ * Enqueue the irq_work @work on @cpu unless it's already pending
+ * somewhere.
+ *
+ * Can be re-enqueued while the callback is still in progress.
+ */
+bool irq_work_queue_on(struct irq_work *work, int cpu)
+{
+        /* All work should have been flushed before going offline */
+        WARN_ON_ONCE(cpu_is_offline(cpu));
+
+        /* Arch remote IPI send/receive backend aren't NMI safe */
+        WARN_ON_ONCE(in_nmi());
+
+        /* Only queue if not already pending */
+        if (!irq_work_claim(work))
+                return false;
+
+        if (llist_add(&work->llnode, &per_cpu(raised_list, cpu)))
+                arch_send_call_function_single_ipi(cpu);
+
+        return true;
+}
+EXPORT_SYMBOL_GPL(irq_work_queue_on);
+#endif
+
 /*
  * Enqueue the irq_work @entry unless it's already pending
  * somewhere.
@@ -70,7 +97,7 @@ void irq_work_queue(struct irq_work *work)
 	/* Queue the entry and raise the IPI if needed. */
 	preempt_disable();
 
-	llist_add(&work->llnode, &__get_cpu_var(irq_work_list));
+	llist_add(&work->llnode, &__get_cpu_var(raised_list));
 
 	/*
 	 * If the work is not "lazy" or the tick is stopped, raise the irq
@@ -90,7 +117,7 @@ bool irq_work_needs_cpu(void)
 {
 	struct llist_head *this_list;
 
-	this_list = &__get_cpu_var(irq_work_list);
+	this_list = &__get_cpu_var(raised_list);
 	if (llist_empty_relaxed(this_list))
 		return false;
 
@@ -115,7 +142,7 @@ static void __irq_work_run(void)
 	__this_cpu_write(irq_work_raised, 0);
 	barrier();
 
-	this_list = &__get_cpu_var(irq_work_list);
+	this_list = &__get_cpu_var(raised_list);
 	if (llist_empty_relaxed(this_list))
 		return;
 
