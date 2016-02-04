@@ -48,8 +48,9 @@ typedef enum {
 /* configurable parameters */
 static unsigned int sample_rate = 250;		/* msec */
 static unsigned int max_cpus = 6;
-static unsigned int min_cpus = 1;
+static unsigned int min_cpus = 2;
 static unsigned int touch_boost_enabled = 0;
+static unsigned int hotplug_enable = 1;
 
 /* 1 - target_load; 2 - target_thermal; 3 - target_history; 4 - target_predict */
 static unsigned int policy = 4;		
@@ -96,6 +97,8 @@ static int curr_index = 0;
 
 static void print_cpus_all(void);
 static unsigned int get_average_load(void);
+static void cpus_online_all(void);
+static void offline_cpus(void);
 
 static void target_load_policy(void)	{
 	unsigned int curr_load = get_average_load();
@@ -115,7 +118,9 @@ static void target_load_policy(void)	{
 			check_count++;
 	}
 
+#ifdef X_PLUG_DEBUG
 	pr_info("%s Current Load = %d; Check count = %d", X_PLUG, curr_load, check_count);
+#endif
 
 	if(check_count >= (scaled_sampler))		{
 #if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)	
@@ -209,10 +214,16 @@ static void __cpuinit xplug_work_fn(struct work_struct *work)
 
 	mutex_lock(&xplug_work_lock);
 
-	update_xplug_state();
+	if(hotplug_enable == 0)	{
+		if(xplug_state != DISABLED)
+			cpus_online_all();
+		xplug_state = DISABLED;
+	} else if(hotplug_enable == 1)
+		update_xplug_state();
 
 	switch (xplug_state) {
 	case DISABLED:
+		sample = true;
 		break;
 	case IDLE:
 		sample = true;
@@ -256,7 +267,7 @@ static void __cpuinit xplug_work_fn(struct work_struct *work)
 
 // Utilities and Helpers
 
-static inline void offline_cpus(void)
+static void offline_cpus(void)
 {
 	unsigned int j;
 	for(j = min_cpus ; j < NR_CPUS; j++)
@@ -270,7 +281,7 @@ static inline void offline_cpus(void)
 #endif
 }
 
-static inline void cpus_online_all(void)
+static void cpus_online_all(void)
 {
 	unsigned int j;
 
@@ -340,18 +351,22 @@ static unsigned int get_average_load(void)
 
 static void xplug_suspend(void)
 {
-	offline_cpus();
+	if(hotplug_enable == 1)	{
+		offline_cpus();
 #if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)
-	pr_info("%s: suspend\n", X_PLUG);
+		pr_info("%s: suspend\n", X_PLUG);
 #endif
+	}
 }
 
 static void __ref xplug_resume(void)
 {
-	cpus_online_all();
+	if(hotplug_enable == 1)	{
+		cpus_online_all();
 #if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)
-	pr_info("%s: resume\n", X_PLUG);
+		pr_info("%s: resume\n", X_PLUG);
 #endif
+	}
 }
 
 static void __cpuinit xplug_resume_work_fn(struct work_struct *work)
@@ -478,6 +493,25 @@ static struct input_handler xplug_input_handler = {
 
 /************************** SysFS - Start **************************/
 
+/***** Hotplug Enable Attribute *****/
+static ssize_t hotplug_enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d", hotplug_enable);
+}
+
+static ssize_t __ref hotplug_enable_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	int val;
+	sscanf(buf, "%d", &val);
+	hotplug_enable = val;
+	return count;
+}
+
+static struct kobj_attribute hotplug_enable_attribute =
+       __ATTR(hotplug_enable,
+               0666,
+               hotplug_enable_show, hotplug_enable_store);
+
 /***** Sample Rate Attribute *****/
 static ssize_t sample_rate_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -602,6 +636,7 @@ static struct attribute *xplug_attributes[] = {
 	&target_load_attribute.attr,
 	&dispatch_rate_attribute.attr,
 	&biased_down_up_attribute.attr,
+	&hotplug_enable_attribute.attr,
 	NULL,
 };
 
