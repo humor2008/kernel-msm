@@ -25,7 +25,8 @@ static bool isSuspended = false;
 
 struct notifier_block display_worker;
 
-#define X_PLUG_DEBUG 1
+#define X_PLUG_INFO 1
+//#define X_PLUG_DEBUG 1
 
 #define X_PLUG "xplug"
 
@@ -325,12 +326,12 @@ static unsigned int get_average_load(void)
 		cur_load += get_curr_load(cpu);
 	}
 	put_online_cpus();
-#if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)
+#ifdef X_PLUG_DEBUG
 	pr_info("Total load is %d\n", cur_load);
 #endif
 	cur_load /= num_online_cpus();
 
-#if defined(X_PLUG_INFO ) || defined(X_PLUG_DEBUG)
+#ifdef X_PLUG_DEBUG
 	pr_info("Per-CPU load is %d\n", cur_load);
 #endif
 	
