@@ -88,7 +88,7 @@ module_param(temp_threshold, int, 0644);
 
 static struct msm_thermal_data msm_thermal_info;
 static struct delayed_work check_temp_work;
-static bool core_control_enabled = 1;
+static bool core_control_enabled = 0;
 static uint32_t cpus_offlined;
 static cpumask_var_t cpus_previously_online;
 static DEFINE_MUTEX(core_control_mutex);
@@ -4183,7 +4183,7 @@ static ssize_t __ref store_cc_enabled(struct kobject *kobj,
 		struct kobj_attribute *attr, const char *buf, size_t count)
 {
 	// Disable Core Control. Let the hotplug driver deal with this
-	core_control_enabled = 1;
+	core_control_enabled = 0;
 
 	/*int ret = 0;
 	int val = 0;
